@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: kq-postgres
+    environment:
+      POSTGRES_USER: kq
+      POSTGRES_PASSWORD: kq
+      POSTGRES_DB: kqpostgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - kq-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kq -d kqpostgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  kq-pgdata:
