@@ -2,4 +2,4 @@
 __pycache__/
 *.pyc
 .env
-.schemas.py.swp
+app/.schemas.py.swp
