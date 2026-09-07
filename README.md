@@ -10,7 +10,7 @@ and refuse the calls that exceed a key's monthly allowance.
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Pydantic](https://img.shields.io/badge/Pydantic-E92063?style=flat-square&logo=pydantic&logoColor=white)](https://docs.pydantic.dev/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 
@@ -47,7 +47,7 @@ persisted. A database dump cannot be replayed against the API, and a key that is
 lost — there is no recovery path, only reissue.
 
 **Usage aggregation stays fast at ten million rows.** Monthly totals are served by a
-composite index on `(api_key_id, created_at)`, not a sequential scan. Query plans are
+composite index on `(api_key_id, requested_at)`, not a sequential scan. Query plans are
 verified with `EXPLAIN ANALYZE` rather than assumed.
 
 **Quota cannot be overspent under concurrency.** Two simultaneous requests against a key
@@ -64,10 +64,22 @@ reviewed migration. No table is altered by hand, in any environment.
 ```bash
 git clone https://github.com/goutham-226/key-quota-service.git
 cd key-quota-service
+```
 
+Start PostgreSQL and load the schema:
+
+```bash
+docker compose up -d
+docker exec -i kq-postgres psql -U kq -d kqpostgres -v ON_ERROR_STOP=1 < sql/001_schema.sql
+```
+
+Apply the remaining schema and seed files in `sql/` the same way.
+
+Then the API:
+
+```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-
 uvicorn app.main:app --reload
 ```
 
@@ -109,10 +121,28 @@ curl -X POST http://127.0.0.1:8000/v1/echo \
 
 ```
 app/
-├── main.py       FastAPI application and routes
-├── config.py     Settings, injected via Depends
-└── schemas.py    Pydantic models — the API contract
+├── main.py            FastAPI application and routes
+├── config.py          Settings, injected via Depends
+└── schemas.py         Pydantic models — the API contract
+
+sql/
+├── 001_schema.sql
+├── 002_schema.sql
+├── 002_seed.sql
+├── 004_seed.sql
+├── query.sql
+├── total_token_count.sql
+├── usage_records_schema.sql
+├── usage_records_seed.sql
+└── usage_records_query.sql
+
+docker-compose.yml     PostgreSQL 17 with a named volume and health check
 ```
+
+**Three tables.** `users` owns identity, `api_keys` holds one row per issued credential
+with its own quota and revocation timestamp, and `usage_records` accumulates one row per
+metered request. Keys cascade from users and usage cascades from keys, so removing an
+account leaves nothing orphaned.
 
 **Input and output models are kept separate throughout.** A client cannot set a
 server-owned field, because no such field exists on the input model. A server-side secret
