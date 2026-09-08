@@ -77,7 +77,7 @@ docker compose up -d
 Configure the environment — copy `.env.example` to `.env` and set the connection string:
 
 ```
-DATABASE_URL=postgresql+asyncpg://kq:kq@localhost:5432/kqpostgres
+DATABASE_URL=postgresql+asyncpg://User:Password@host:port/db_name
 ```
 
 Install dependencies, apply migrations, and run:
