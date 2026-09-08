@@ -132,6 +132,25 @@ curl -X POST http://127.0.0.1:8000/v1/echo \
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    C[Client] -->|Bearer key| A[FastAPI]
+
+    subgraph deps[Dependencies]
+        AUTH[get_current_key<br/>hash → lookup → 401]
+        QUOTA[quota check<br/>→ 429]
+    end
+
+    A --> AUTH --> QUOTA --> H[Handler]
+    H --> M[(usage_records)]
+    H -->|response| C
+
+    AUTH -.-> DB[(PostgreSQL)]
+    QUOTA -.-> DB
+    M -.-> DB
+```
+Authentication and quota enforcement run as dependencies before the handler is called, so handlers contain no auth or metering logic.
+
 ```
 .
 ├── app/
