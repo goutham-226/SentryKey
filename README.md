@@ -1,6 +1,6 @@
 <div align="center">
 
-# Key &amp; Quota Service
+# SentryKey
 
 **API key issuance, Bearer authentication, and per-key usage metering.**
 
@@ -11,7 +11,7 @@ and refuse the calls that exceed a key's monthly allowance.
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Pydantic](https://img.shields.io/badge/Pydantic-E92063?style=flat-square&logo=pydantic&logoColor=white)](https://docs.pydantic.dev/)
 [![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0-D71F00?style=flat-square&logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
-[![Alembic](https://img.shields.io/badge/Alembic-6BA81E?style=flat-square&logo=alembic&logoColor=white)](https://alembic.sqlalchemy.org/)
+[![Alembic](https://img.shields.io/badge/Alembic-migrations-6BA81E?style=flat-square)](https://alembic.sqlalchemy.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
@@ -32,7 +32,7 @@ Every service exposed to more than one consumer eventually needs the same four t
 a way to identify who is calling, a record of what they called, a limit on how much they
 may call, and a way to cut a caller off without redeploying.
 
-**Key &amp; Quota Service** is that layer, built standalone. It issues API keys tied to
+**SentryKey** is that layer, built standalone. It issues API keys tied to
 users, authenticates incoming requests by hashed key, writes a usage record for every
 call, and enforces a per-key monthly token allowance.
 
@@ -64,8 +64,8 @@ revision. No table is altered by hand, in any environment.
 **Requirements:** Python 3.12+, Docker
 
 ```bash
-git clone https://github.com/goutham-226/key-quota-service.git
-cd key-quota-service
+git clone https://github.com/goutham-226/SentryKey.git
+cd SentryKey
 ```
 
 Start PostgreSQL:
