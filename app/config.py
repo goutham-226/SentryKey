@@ -1,5 +1,5 @@
 from functools import lru_cache
-from pydantic-settings import BaseSettings,SettingsConfigDict
+from pydantic_settings import BaseSettings,SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env",extra="ignore") #parses and matches data from .env file
