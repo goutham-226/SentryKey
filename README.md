@@ -126,15 +126,9 @@ app/
 └── schemas.py         Pydantic models — the API contract
 
 sql/
-├── 001_schema.sql
-├── 002_schema.sql
-├── 002_seed.sql
-├── 004_seed.sql
-├── query.sql
-├── total_token_count.sql
-├── usage_records_schema.sql
-├── usage_records_seed.sql
-└── usage_records_query.sql
+├── 001_schema.sql     Table definitions, constraints, and foreign keys
+├── 002_seed.sql       Sample users, keys, and usage rows for local development
+└── queries.sql        Usage and quota reporting queries
 
 docker-compose.yml     PostgreSQL 17 with a named volume and health check
 ```
