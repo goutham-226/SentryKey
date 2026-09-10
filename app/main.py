@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, Header
 from app.schemas import UserCreate, UserOut, EchoRequest, EchoResponse, KeyOut, KeyCreate, UserCreated
 from app.config import Settings, get_settings
 from sqlalchemy.exc import IntegrityError
@@ -7,11 +7,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.models import Users, ApiKeys, UsageRecords
 from pydantic import EmailStr
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 import secrets
 import hashlib
 
 app = FastAPI(title="key & quota service",version="0.1.0")
+
+
+async def get_key(authorization:str = Header(), db: AsyncSession = Depends(get_db)) -> ApiKeys:
+    scheme,_,raw_key = authorization.partition(" ")
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    stmt = select(ApiKeys).where(ApiKeys.key_hash == key_hash)
+    result = await db.execute(stmt)
+    key = result.scalar_one_or_none()
+    if key is None:
+        raise HTTPException(status_code=401,detail="Unautherized")
+    return key
+
 
 @app.get("/health")
 def health() -> dict[str,str]:
@@ -54,17 +66,28 @@ async def get_users(user_id: int,db: AsyncSession = Depends(get_db)):
     return user
 
 @app.post("/v1/echo",response_model=EchoResponse) #200 is default FastAPI status code for post
-def echo(payload: EchoRequest, settings: Settings = Depends(get_settings)):
+async def echo(payload:EchoRequest,key:ApiKeys=Depends(get_key),settings:Settings=Depends(get_settings),db:AsyncSession=Depends(get_db)):
+    stmt = select(func.sum(UsageRecords.token_count)).where(UsageRecords.api_key_id == key.id).where(UsageRecords.requested_at >= func.date_trunc("month", func.now()))
+    result = await db.execute(stmt)
+    token_count = result.scalar_one_or_none() # get_key returns a valid ApiKeys row
+    if token_count is not None and token_count > key.monthly_quota:
+        usage = UsageRecords(api_key_id=key.id,token_count=0,status_code=429,latency_ms=0)
+        raise HTTPException(status_code=429,detail="Monthly Quota Exceeded")
     request = payload.prompt
     reply = request[::-1] # rev the string str[start:stop:step]
     tokens = len(reply.split()) #returns the number of words(tokens)
-    echo_ret = {
-        "output": reply,
-        "tokens_used": tokens,
-        "quota": settings.default_monthly_quota,
-    }
-    return echo_ret
-
+    time_ms = 0
+    usage = UsageRecords(api_key_id=key.id,token_count=tokens,status_code=200,latency_ms=time_ms)
+    db.add(usage)
+    await db.commit()
+    quota = key.monthly_quota - tokens
+    echo_response = EchoResponse(
+        output=reply,
+        tokens_used=tokens,
+        quota=quota,
+    )
+    return echo_response 
+    
 
 @app.post("/v1/keys",response_model=KeyOut,status_code=status.HTTP_201_CREATED)
 async def create_key(payload: KeyCreate,db: AsyncSession = Depends(get_db)):
