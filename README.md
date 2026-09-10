@@ -77,7 +77,7 @@ docker compose up -d
 Configure the environment — copy `.env.example` to `.env` and set the connection string:
 
 ```
-DATABASE_URL=postgresql+asyncpg://User:Password@host:port/db_name
+DATABASE_URL=postgresql+asyncpg://kq:kq@localhost:5432/kqpostgres
 ```
 
 Install dependencies, apply migrations, and run:
@@ -109,17 +109,42 @@ docker exec -i kq-postgres psql -U kq -d kqpostgres < sql/002_seed.sql
 | | Method | Path | Description |
 | :---: | :--- | :--- | :--- |
 | 🔓 | `GET` | `/health` | Liveness probe. Unversioned — infrastructure, not API surface. |
-| 🔓 | `POST` | `/v1/users` | Create a user. `409` on duplicate email. |
-| 🔓 | `GET` | `/v1/users` | List users, paginated via `limit` (1–100) and `offset`. |
-| 🔓 | `POST` | `/v1/echo` | Metered endpoint. Returns a transformed prompt and its token count. |
+| 🔓 | `POST` | `/v1/users` | Create a user and issue their first API key. `409` on duplicate email. |
+| 🔓 | `GET` | `/v1/users/{user_id}` | Fetch a single user. `404` if no such user. |
+| 🔓 | `POST` | `/v1/keys` | Issue an additional key for an existing user, identified by email. |
+| 🔐 | `POST` | `/v1/echo` | Metered endpoint. Records usage and rejects with `429` past quota. |
 
 🔓 public &nbsp;&middot;&nbsp; 🔐 requires `Authorization: Bearer <key>`
 
+**The raw key is returned exactly once**, in the response to `POST /v1/users` and
+`POST /v1/keys`. Only a SHA-256 hash and a short display prefix are persisted, so a lost
+key cannot be recovered — only replaced.
+
 ### Example
+
+Create a user and capture the key:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/users \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "asha@example.com", "name": "Asha"}'
+```
+
+```json
+{
+  "id": 1,
+  "email": "asha@example.com",
+  "name": "Asha",
+  "api_key": "kq_z9_Nuql9B9YsDYmhBfWPvBLvlCeXzIU"
+}
+```
+
+Then call the metered endpoint with it:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/echo \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer kq_z9_Nuql9B9YsDYmhBfWPvBLvlCeXzIU' \
   -d '{"prompt": "hello world"}'
 ```
 
@@ -131,25 +156,6 @@ curl -X POST http://127.0.0.1:8000/v1/echo \
 ```
 
 ## Architecture
-
-```mermaid
-flowchart LR
-    C[Client] -->|Bearer key| A[FastAPI]
-
-    subgraph deps[Dependencies]
-        AUTH[get_current_key<br/>hash → lookup → 401]
-        QUOTA[quota check<br/>→ 429]
-    end
-
-    A --> AUTH --> QUOTA --> H[Handler]
-    H --> M[(usage_records)]
-    H -->|response| C
-
-    AUTH -.-> DB[(PostgreSQL)]
-    QUOTA -.-> DB
-    M -.-> DB
-```
-Authentication and quota enforcement run as dependencies before the handler is called, so handlers contain no auth or metering logic.
 
 ```
 .
