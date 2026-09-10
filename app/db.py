@@ -12,7 +12,7 @@ engine = create_async_engine(settings.database_url,echo=False,pool_pre_ping=True
 
 #create a session maker -> an instance of a session [a session is the one making the actuall connection]
 
-SessionLocal = async_sessionmaker(engine,class=AsyncSession,exit_on_commit=False)
+SessionLocal = async_sessionmaker(engine,class_=AsyncSession,expire_on_commit=False)
 
 async def get_db() -> AsyncGenerator[AsyncSession,None]:
     async with SessionLocal() as session:

@@ -26,7 +26,7 @@ class ApiKeys(Base):
     monthly_quota: Mapped[int] = mapped_column(BigInteger,server_default="100000")
     revoked_on: Mapped[datetime|None]
     created_on: Mapped[datetime] = mapped_column(server_default=func.now())
-    user: Mapped["User"] = relationship(back_populates='api_keys')
+    user: Mapped["Users"] = relationship(back_populates='api_key')
 
 class UsageRecords(Base):
     __tablename__ = 'usage_records'
