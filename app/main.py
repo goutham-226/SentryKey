@@ -65,6 +65,8 @@ async def get_users(user_id: int,db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404,detail="Error User not found")
     return user
 
+
+
 @app.post("/v1/echo",response_model=EchoResponse) #200 is default FastAPI status code for post
 async def echo(payload:EchoRequest,key:ApiKeys=Depends(get_key),settings:Settings=Depends(get_settings),db:AsyncSession=Depends(get_db)):
     stmt = select(func.sum(UsageRecords.token_count)).where(UsageRecords.api_key_id == key.id).where(UsageRecords.requested_at >= func.date_trunc("month", func.now()))
