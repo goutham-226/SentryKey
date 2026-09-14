@@ -1,35 +1,26 @@
 from datetime import datetime
-from pydantic import BaseModel,EmailStr,Field
+from pydantic import BaseModel,EmailStr,Field,SecretStr
 
 class UserCreate(BaseModel):
     email: EmailStr
     name: str = Field(min_length=1,max_length=100)
-
+    password: SecretStr = Field(min_length=8,max_length=100)
+ 
 class UserOut(BaseModel):
     id: int
     email: EmailStr
     name: str
     created_on: datetime
 
-#child class of user out with an extra variable
-class UserCreated(UserOut):
-    api_key: str
-
-class EchoRequest(BaseModel):
-    prompt: str = Field(min_length=1,max_length=8000)
- 
-class EchoResponse(BaseModel):
-    output: str
-    tokens_used: int
-    quota: int
-
 class KeyCreate(BaseModel):
     email: EmailStr
+    password: SecretStr
 
 class KeyOut(BaseModel):
-    id: int
-    user_id: int
-    monthly_quota: int
-    revoked_on: datetime | None
-    created_on: datetime
+    dail_quota: int
     api_key: str
+
+class PublicCatalog(BaseModel):
+    model_name: str
+    provider: str
+    tier: str

@@ -11,8 +11,9 @@ class Users(Base):
     id: Mapped[int] = mapped_column(BigInteger,primary_key=True)
     email: Mapped[str] = mapped_column(Text,unique=True)
     name: Mapped[str] = mapped_column(Text)
+    password_hash: Mapped[str] = mapped_column(Text)
     created_on: Mapped[datetime] = mapped_column(server_default=func.now())
-    tier_id: Mapped[int] = mapped_column(BigInteger,ForeignKey("subscription_tiers.id"))
+    tier_id: Mapped[int|None] = mapped_column(BigInteger,ForeignKey("subscription_tiers.id"))
     api_key: Mapped[list["ApiKeys"]] = relationship(back_populates="user",cascade="all, delete-orphan") # a single user can have 1+ keys
     tier: Mapped["SubscriptionTiers"] = relationship(back_populates="users") # deleting a user should not delete a tier
 
