@@ -1,10 +1,10 @@
 from datetime import datetime
-from pydantic import BaseModel,EmailStr,Field,SecretStr
+from pydantic import BaseModel,EmailStr,Field
 
 class UserCreate(BaseModel):
     email: EmailStr
     name: str = Field(min_length=1,max_length=100)
-    password: SecretStr = Field(min_length=8,max_length=100)
+    password: str = Field(min_length=8,max_length=27)
  
 class UserOut(BaseModel):
     id: int
@@ -14,10 +14,10 @@ class UserOut(BaseModel):
 
 class KeyCreate(BaseModel):
     email: EmailStr
-    password: SecretStr
+    password: str
 
 class KeyOut(BaseModel):
-    dail_quota: int
+    daily_quota: int
     api_key: str
 
 class PublicCatalog(BaseModel):

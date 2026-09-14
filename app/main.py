@@ -21,6 +21,7 @@ def health() -> dict[str,str]:
 
 @app.post("/v1/auth/register",response_model=UserOut,status_code=status.HTTP_201_CREATED)
 async def register(payload: UserCreate,db: AsyncSession = Depends(get_db)):
+    print(len(payload.password))
     password = hash_password(payload.password)
     user = Users(email=payload.email,name=payload.name,password_hash=password)
     db.add(user)
@@ -99,8 +100,8 @@ async def get_keys(user: Users = Depends(get_current_user), db: AsyncSession = D
     key_out = []
     for key in apikey:
         out = KeyOut(
-            daily_quota: key.daily_quota,
-            api_key: key.key_prefix,
+            daily_quota= key.daily_quota,
+            api_key= key.key_prefix,
         )
         key_out.append(out)
     return key_out
