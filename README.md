@@ -37,10 +37,25 @@ model the caller asked for, and owns everything that sits between a request and 
 inference call: who is asking, whether they are entitled to that model, how much they have
 spent today, and what the conversation so far consisted of.
 
-Access is tiered. Three subscription plans map to nine models, so a basic subscriber
-reaches open-weight models, a pro subscriber reaches mid-tier hosted models, and a premium
-subscriber reaches the frontier ones — enforced at the gateway rather than trusted to the
-client.
+Access is tiered, and enforced at the gateway rather than trusted to the client. Tiers are
+cumulative — every plan reaches its own models and everything below it.
+
+| Tier | Provider | Model | Context |
+| :--- | :--- | :--- | ---: |
+| **Premium** | ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white) | GPT-5.6 Terra | 1,050,000 |
+| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white) | Claude Sonnet 5 | 1,000,000 |
+| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3.1 Pro | 1,048,576 |
+| **Pro** | ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white) | o4-mini | 200,000 |
+| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white) | Claude Haiku 4.5 | 200,000 |
+| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3 Flash | 1,048,576 |
+| **Basic** | ![Meta](https://img.shields.io/badge/Meta-0081FB?style=flat&logo=meta&logoColor=white) | Llama 4 Maverick | 1,000,000 |
+| | ![Qwen](https://img.shields.io/badge/Qwen-615CED?style=flat&logo=alibabacloud&logoColor=white) | Qwen3 235B Instruct | 262,144 |
+| | ![DeepSeek](https://img.shields.io/badge/DeepSeek-4D6BFE?style=flat&logo=deepseek&logoColor=white) | DeepSeek V3 | 128,000 |
+
+All nine are served through Replicate. Every tier gets the same 100,000 token daily budget —
+the plan buys capability, not volume. The catalog lives in the database, so adding a model,
+moving one between tiers or pulling one during an incident is an `UPDATE` rather than a
+deploy.
 
 Because history lives in the gateway rather than the client, a conversation is portable
 across models. Start on a frontier model, continue on a cheaper one, and the thread comes
