@@ -33,6 +33,23 @@ class UserSubscribe(BaseModel):
 class SubscribeCatalog(BaseModel):
     tier: Literal["Basic","Pro","Premium"]
 
+class ChatRequest(BaseModel):
+    prompt: string
+    model: string
+    max_tokens: int
+    temperature: float
+    conversation_id: int | None
+
+class ChatResponse(BaseModel):
+    id: int
+    model: string
+    output: str
+    prompt_tokens: int
+    completion_tokens: int
+    quota_remaining: int
+    conversation_id: int
+
+
 
 
 

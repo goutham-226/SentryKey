@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, status, Depends, Header
-from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, PublicCatalog, UserSubscribe, SubscribeCatalog
+from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, PublicCatalog, UserSubscribe, SubscribeCatalog, ChatRequest, ChatResponse
 from app.config import Settings, get_settings
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,8 @@ from sqlalchemy import func, select, update, text
 import secrets
 import hashlib
 from app.security import hash_password,verify_password
-from app.deps import get_current_user
+from app.deps import get_current_user, get_bearer_key
+from replicate.client import Client
 
 app = FastAPI(title="key & quota service",version="0.1.0")
 
@@ -80,7 +81,7 @@ async def display_models(db: AsyncSession = Depends(get_db)):
         result = await db.execute(stmt)
         tier = result.scalar()
         catalog = PublicCatalog(
-            model_name=m.display_name,
+            model_name=m.model_id,
             provider=m.provider,
             tier=tier.name,
         )
@@ -146,7 +147,52 @@ async def subscribtions(payload: SubscribeCatalog,user: Users = Depends(get_curr
     return user_subscribe
     
 
+@app.post('/v1/chat/completions',response_model=ChatResponse)
+async def chat_completions(api_key: ApiKeys = Depends(get_bearer_key),payload: ChatResponse,db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings)):
+    model_name = payload.model
+    stmt = select(Subscriptions).where(Subscriptions.user_id == api_key.user_id)
+    result = await db.execute(stmt)
+    subscription = result.scalar_one_or_none()
+    if subscription is None or subscription.period_end < datetime.now(timezone.utc):
+        raise HTTPException(
+            status=403,
+            detail='Susbcription does not exist',
+        )
+    stmt = select(SubscriptionTiers).where(SubscriptionTiers.id == susbscription.tier_id)
+    result = await db.execute(stmt)
+    tier = result.scalar_one_or_none()
+    stmt = select(Models).where(Models.model_id == model_name)
+    result = await db.execute(stmt)
+    model = result.scalar_one_or_none()
+    if model is none:
+        raise HTTPException(
+            status=404,
+            detail='Model not found',
+        )
+    stmt = select(Models).where(Models.min_tier_id == tier.id)
+    result = await db.execute(stmt)
+    model = result.scalars().all()
+    found = False
+    for m in model:
+        if m.model_id == model_name:
+            found = True
+    if not found:
+        raise HTTPException(
+            status=403,
+            detail='User lacks privilige',
+        )
+    input={
+        "prompt":payload.prompt,
+        "max_tokens":payload.max_tokens,
+        "temperature":payload.temperature,
+    }
+    client = Client(api_token=settings.replicate_api_token)
     
+
+    
+    
+
+
 
 
 
