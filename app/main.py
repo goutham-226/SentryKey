@@ -1,11 +1,11 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, status, Depends, Header
-from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, PublicCatalog
+from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, PublicCatalog, UserSubscribe, SubscribeCatalog
 from app.config import Settings, get_settings
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
-from app.models import Users, ApiKeys, UsageRecords, Models, SubscriptionTiers
+from app.models import Users, ApiKeys, UsageRecords, Models, SubscriptionTiers, Subscriptions
 from pydantic import EmailStr,SecretStr
 from sqlalchemy import func, select, update
 import secrets
@@ -105,6 +105,47 @@ async def get_keys(user: Users = Depends(get_current_user), db: AsyncSession = D
         )
         key_out.append(out)
     return key_out
+
+@app.post('/v1/subscriptions',response_model=UserSubscribe,status_code=status.HTTP_201_CREATED)
+async def subscribtions(payload: SubscribeCatalog,user: Users = Depends(get_current_user),db: AsyncSession = Depends(get_db)):
+    #401 is already raised if credentials are wrong by get_current_user
+    tier_name = payload.tier
+    stmt = select(SubscriptionTiers).where(SubscriptionTiers.name == tier_name)
+    result = await db.execute(stmt)
+    tier = result.scalar_one_or_none()
+    if tier is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Database Seed Fail!"
+        )
+    stmt = select(Subscriptions.id).where(
+        Subscriptions.user_id == user.id,
+        func.now().between(Subscriptions.period_start,Subscriptions.period_end),
+        )
+    result = await db.execute(stmt)
+    sub = result.scalar_one_or_none() # only one row exists with an ective subscription between start and end
+    if sub is not None:
+        raise HTTPException(
+            status_code=409,
+            detail='Subscription Already exists!'
+        )
+    subscription = Subscriptions(
+        user_id = user.id,
+        tier_id = tier.id,
+        status = "active",
+        period_start = func.now(),
+        period_end = func.now() + text("interval '1 month'")
+    )
+    db.add(subscription)
+    await db.commit()
+    await db.refresh(subscription)
+    user_subscribe = UserSubscribe(
+        tier = tier.name,
+        period_end=subscription.period_end,
+    )
+    return user_subscribe
+    
+
     
 
 

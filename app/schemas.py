@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel,EmailStr,Field
 
 class UserCreate(BaseModel):
@@ -24,3 +25,19 @@ class PublicCatalog(BaseModel):
     model_name: str
     provider: str
     tier: str
+
+class UserSubscribe(BaseModel):
+    tier: str
+    period_end: datetime
+
+class SusbcribeCatalog(BaseModel):
+    tier: Literal["Basic","Pro","Premium"]
+
+
+
+
+
+
+
+
+

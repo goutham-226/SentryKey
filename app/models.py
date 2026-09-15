@@ -13,9 +13,8 @@ class Users(Base):
     name: Mapped[str] = mapped_column(Text)
     password_hash: Mapped[str] = mapped_column(Text)
     created_on: Mapped[datetime] = mapped_column(server_default=func.now())
-    tier_id: Mapped[int|None] = mapped_column(BigInteger,ForeignKey("subscription_tiers.id"))
     api_key: Mapped[list["ApiKeys"]] = relationship(back_populates="user",cascade="all, delete-orphan") # a single user can have 1+ keys
-    tier: Mapped["SubscriptionTiers"] = relationship(back_populates="users") # deleting a user should not delete a tier
+    subscription: Mapped[list["Subscriptions"]] = relationship(back_populates='user',cascade='all, delete-orphan')
 
 class ApiKeys(Base):
     __tablename__ = 'api_keys'
@@ -50,8 +49,8 @@ class SubscriptionTiers(Base):
     rank: Mapped[int] = mapped_column(SmallInteger)
     daily_quota: Mapped[int] = mapped_column(Integer,server_default="100000")
     created_on: Mapped[datetime] = mapped_column(server_default=func.now())
-    users: Mapped[list["Users"]] = relationship(back_populates='tier') # a single Tier can have multiple users
     model: Mapped[list["Models"]] = relationship(back_populates='tiers')
+    subscription: Mapped[list["Subscriptions"]] = relationship(back_populates='tier')
 
 class Models(Base):
     __tablename__ = 'models'
@@ -88,6 +87,18 @@ class Messages(Base):
     created_on: Mapped[datetime ] = mapped_column(server_default=func.now())
     conversation: Mapped['Conversations'] = relationship(back_populates='message')
 
+
+class Subscriptions(Base):
+    __tablename__ = 'subscriptions'
+    id: Mapped[int] = mapped_column(BigInteger,primary_key=True)
+    user_id: Mapped[int] = mapped_column(BigInteger,ForeignKey('users.id',ondelete='CASCADE'))
+    tier_id: Mapped[int] = mapped_column(BigInteger,ForeignKey('subscription_tiers.id',ondelete='CASCADE'))
+    status: Mapped[str] = mapped_column(Text)
+    period_start: Mapped[datetime] = mapped_column(Datetime) # business fact dont set it to server default 
+    period_end: Mapped[datetime] = mapped_column(DateTime)
+    created_on: Mapped[datetime] = mapped_column(server_default=func.now())
+    user: Mapped["Users"] = relationship(back_populates='subscription')
+    tier: Mapped["SubscriptionTiers"] = relationship(back_populates='subscription')
 
 
 
