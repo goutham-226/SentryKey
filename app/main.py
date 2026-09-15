@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.models import Users, ApiKeys, UsageRecords, Models, SubscriptionTiers, Subscriptions
 from pydantic import EmailStr,SecretStr
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, update, text
 import secrets
 import hashlib
 from app.security import hash_password,verify_password

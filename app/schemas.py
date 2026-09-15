@@ -30,7 +30,7 @@ class UserSubscribe(BaseModel):
     tier: str
     period_end: datetime
 
-class SusbcribeCatalog(BaseModel):
+class SubscribeCatalog(BaseModel):
     tier: Literal["Basic","Pro","Premium"]
 
 

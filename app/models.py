@@ -94,7 +94,7 @@ class Subscriptions(Base):
     user_id: Mapped[int] = mapped_column(BigInteger,ForeignKey('users.id',ondelete='CASCADE'))
     tier_id: Mapped[int] = mapped_column(BigInteger,ForeignKey('subscription_tiers.id',ondelete='CASCADE'))
     status: Mapped[str] = mapped_column(Text)
-    period_start: Mapped[datetime] = mapped_column(Datetime) # business fact dont set it to server default 
+    period_start: Mapped[datetime] = mapped_column(DateTime) # business fact dont set it to server default 
     period_end: Mapped[datetime] = mapped_column(DateTime)
     created_on: Mapped[datetime] = mapped_column(server_default=func.now())
     user: Mapped["Users"] = relationship(back_populates='subscription')
