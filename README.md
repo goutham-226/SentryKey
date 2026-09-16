@@ -37,8 +37,9 @@ model the caller asked for, and owns everything that sits between a request and 
 inference call: who is asking, whether they are entitled to that model, how much they have
 spent today, and what the conversation so far consisted of.
 
-Access is tiered, and enforced at the gateway rather than trusted to the client. Tiers are
-cumulative — every plan reaches its own models and everything below it.
+Access is tiered, and enforced at the gateway rather than trusted to the client. Each plan
+unlocks its own set of models — a plan reaches the models listed under it, not the ones
+under other tiers.
 
 | Tier | Provider | Model | Context |
 | :--- | :--- | :--- | ---: |
@@ -58,8 +59,7 @@ moving one between tiers or pulling one during an incident is an `UPDATE` rather
 deploy.
 
 Because history lives in the gateway rather than the client, a conversation is portable
-across models. Start on a frontier model, continue on a cheaper one, and the thread comes
-with you.
+across models. Start on one model, continue on another, and the thread comes with you.
 
 ## Architecture
 
@@ -163,14 +163,18 @@ ssh -L 8000:localhost:8000 user@host
 | 🔓 | `GET` | `/v1/models-catalog` | The public catalog: every active model and the plan it needs. |
 | 🔑 | `POST` | `/v1/keys` | Issue an API key. The raw value is returned **once**. |
 | 🔑 | `GET` | `/v1/keys` | List the caller's keys by prefix, with quota and revocation state. |
+| 🔑 | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if a subscription is already active. |
+| 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier, `429` once the daily budget is spent. |
 
 🔓 public &nbsp;&middot;&nbsp; 🔑 email and password &nbsp;&middot;&nbsp; 🔐 `Authorization: Bearer <key>`
 
-Two credentials, deliberately. Key management requires the account password, because an API
-key is a bearer credential that lives in config files and CI variables — a leaked key can
-spend quota, but it cannot mint more keys or escalate.
+Two credentials, deliberately. Key management and billing require the account password,
+because an API key is a bearer credential that lives in config files and CI variables — a
+leaked key can spend quota, but it cannot mint more keys, change the plan or escalate.
 
-### Example
+### Getting from zero to a completion
+
+**1. Issue a key.**
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/keys \
@@ -186,6 +190,44 @@ curl -X POST http://127.0.0.1:8000/v1/keys \
 
 That value is shown once and cannot be retrieved. Only its first eleven characters and a
 hash are stored.
+
+**2. Subscribe to a plan.** The period starts now and runs for one month; the database
+computes both ends.
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/subscriptions \
+  -u 'asha@example.com:correct-horse-battery' \
+  -H 'Content-Type: application/json' \
+  -d '{"tier": "Basic"}'
+```
+
+**3. Send a prompt.** Omit `conversation_id` to start a new conversation; send back the
+returned id to continue it, on the same model or a different one.
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Authorization: Bearer kq_z9_Nuql9B9YsDYmhBfWPvBLvlCeXzIU' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "model": "deepseek-ai/deepseek-v3",
+        "prompt": "Explain the computer programs written for the Apollo moon landing",
+        "max_tokens": 512
+      }'
+```
+
+```json
+{
+  "model": "deepseek-ai/deepseek-v3",
+  "output": "The Apollo Guidance Computer ran software written in...",
+  "prompt_tokens": 16,
+  "completion_tokens": 498,
+  "quota_remaining": 99486,
+  "conversation_id": 1
+}
+```
+
+`max_tokens` is clamped to the remaining daily budget before the request reaches the
+provider, so a single call cannot overrun the quota by more than its own prompt.
 
 ## Data model
 
