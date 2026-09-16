@@ -5,7 +5,7 @@ from app.config import Settings, get_settings
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
-from app.models import Users, ApiKeys, UsageRecords, Models, SubscriptionTiers, Subscriptions
+from app.models import Users, ApiKeys, UsageRecords, Models, SubscriptionTiers, Subscriptions, Messages, Conversations
 from pydantic import EmailStr,SecretStr
 from sqlalchemy import func, select, update, text, Date
 import secrets
@@ -13,6 +13,7 @@ import hashlib
 from app.security import hash_password,verify_password
 from app.deps import get_current_user, get_bearer_key
 from replicate.client import Client
+from decimal import Decimal
 
 app = FastAPI(title="key & quota service",version="0.1.0")
 client = Client(api_token=get_settings().replicate_api_token)
@@ -262,8 +263,8 @@ async def chat_completions(payload: ChatRequest,api_key: ApiKeys = Depends(get_b
     db.add(message)
     await db.commit()
     await db.refresh(message)
-    input_price = model.input_price_per_1M * ((len(prompt.split()))/1000000)
-    out_price = model.output_price_per_1M * ((output_tokens)/1000000)
+    input_price = model.input_price_per_1M * ((len(prompt.split()))/Decimal(1000000))
+    out_price = model.output_price_per_1M * ((output_tokens)/Decimal(1000000))
     cost = input_price + out_price
     usage_records = UsageRecords(
         api_key_id = api_key.id,

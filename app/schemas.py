@@ -34,13 +34,13 @@ class SubscribeCatalog(BaseModel):
     tier: Literal["Basic","Pro","Premium"]
 
 class ChatRequest(BaseModel):
-    prompt: string
-    model: string
+    prompt: str
+    model: str
     max_tokens: int
     conversation_id: int | None
 
 class ChatResponse(BaseModel):
-    model: string
+    model: str
     output: str
     prompt_tokens: int
     completion_tokens: int
