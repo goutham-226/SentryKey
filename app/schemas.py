@@ -37,11 +37,9 @@ class ChatRequest(BaseModel):
     prompt: string
     model: string
     max_tokens: int
-    temperature: float
     conversation_id: int | None
 
 class ChatResponse(BaseModel):
-    id: int
     model: string
     output: str
     prompt_tokens: int
