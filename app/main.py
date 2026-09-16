@@ -298,8 +298,11 @@ async def chat_completions(payload: ChatRequest,api_key: ApiKeys = Depends(get_b
     return chat_response
     
 
-    
-    
+'''
+/v1/chat/completions is the first version of the endpoint
+this will eventually be cleaned up with separate service modules
+and privilige access embeded into get_key function.
+'''
 
 
 
