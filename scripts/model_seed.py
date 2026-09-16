@@ -21,6 +21,7 @@ async def main():
                        display_name='GPT-5.6 TERRA',
                        min_tier_id=premium_id,
                        context_window=1050000,
+                       context_window_limit=100000,
                        input_price_per_1M=2.500000,
                        output_price_per_1M=15.000000,
                       )
@@ -36,6 +37,7 @@ async def main():
                        display_name='GEMINI-3.1 PRO',
                        min_tier_id=premium_id,
                        context_window=1048576,
+                       context_window_limit=100_000,
                        input_price_per_1M=2.000000,
                        output_price_per_1M=12.000000,
                       )
@@ -51,6 +53,7 @@ async def main():
                        display_name='CLAUDE SONNET-5',
                        min_tier_id=premium_id,
                        context_window=1000000,
+                       context_window_limit=100_000,
                        input_price_per_1M=2.000000,
                        output_price_per_1M=10.000000,
                       )
@@ -66,6 +69,7 @@ async def main():
                        display_name='GEMINI-3 FLASH',
                        min_tier_id=pro_id,
                        context_window=1048576,
+                       context_window_limit=50000,
                        input_price_per_1M=0.500000,
                        output_price_per_1M=3.000000,
                       )
@@ -81,6 +85,7 @@ async def main():
                        display_name='O4-MINI',
                        min_tier_id=pro_id,
                        context_window=200000 ,  
+                       context_window_limit=50000,
                        input_price_per_1M=1.000000,
                        output_price_per_1M=4.000000,
                       )
@@ -96,6 +101,7 @@ async def main():
                        display_name='CLAUDE HAIKU-4.5',
                        min_tier_id=pro_id,
                        context_window=200000,  
+                       context_window_limit=50000,
                        input_price_per_1M=1.000000,
                        output_price_per_1M=5.000000,
                       )
@@ -111,6 +117,7 @@ async def main():
                        display_name='Qwen-3 235b',
                        min_tier_id=basic_id,
                        context_window=262144,  
+                       context_window_limit=10000,
                        input_price_per_1M=0.264000,
                        output_price_per_1M=1.060000,
                       )
@@ -126,6 +133,7 @@ async def main():
                          display_name='DEEPSEEK V3',
                          min_tier_id=basic_id,
                          context_window=128000,  
+                         context_window_limit=10000,
                          input_price_per_1M=1.450000,
                          output_price_per_1M=1.450000,
                         )
@@ -140,7 +148,8 @@ async def main():
                        provider='meta',
                        display_name='LLAMA-4 MAVERICK',
                        min_tier_id=basic_id,
-                       context_window=1000000,  
+                       context_window=1000000,
+                       context_window_limit=10000,  
                        input_price_per_1M=0.250000,
                        output_price_per_1M=0.950000,
                       )

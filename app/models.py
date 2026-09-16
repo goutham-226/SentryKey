@@ -59,12 +59,13 @@ class Models(Base):
     provider: Mapped[str] = mapped_column(Text)
     display_name: Mapped[str] = mapped_column(Text)
     min_tier_id: Mapped[int] = mapped_column(BigInteger,ForeignKey('subscription_tiers.id'))
-    tiers: Mapped['SubscriptionTiers'] = relationship(back_populates='model')
     context_window: Mapped[int] = mapped_column(Integer)
+    context_window_limit: Mapped[int] = mapped_column(Integer)
     input_price_per_1M: Mapped[Decimal] = mapped_column(Numeric(12,6))
     output_price_per_1M: Mapped[Decimal] = mapped_column(Numeric(12,6))
     is_active: Mapped[bool] = mapped_column(Boolean,server_default='true') # to raise model not available when provider depricates    
     created_on: Mapped[datetime] = mapped_column(server_default=func.now())
+    tiers: Mapped['SubscriptionTiers'] = relationship(back_populates='model')
 
 class Conversations(Base):
     __tablename__ = 'conversations'
