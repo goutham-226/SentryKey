@@ -1,5 +1,9 @@
+from datetime import timedelta
+from typing import Any
 from app.config import get_settings
 from replicate.client import Client
+from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessageParam
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, select, text, Date
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,34 +13,65 @@ from fastapi import HTTPException
 from app.schemas import ChatRequest, ChatResponse
 
 settings = get_settings()
-client = Client(api_token=settings.replicate_api_token)
+replicate_client = Client(api_token=settings.replicate_api_token)
+open_ai_client = AsyncOpenAI(api_key=settings.openai_api_key)
 
-async def  get_response(api_key: ApiKeys, payload: ChatRequest) -> ChatResponse:
-    #api_key is authorized
-    #model and tier are checked
+async def open_ai(payload: ChatRequest, chat_history: list[dict[str,str]] | None) -> ChatCompletion:
+    if history is None:
+        try:
+            response = await client.chat.completions.create(
+                model=payload.model,
+                stream=False,
+            )
+        except 
+    else:
+        response = await client.chat.completions.create(
+            model=payload.model,
+            messages=chat_history,
+            stream=False,
+        )
+    return response
+
+
+async def  get_response(api_key: ApiKeys, payload: ChatRequest) -> ChatResponse:  #api_key is authorized, model and tier are checked
     async with SessionLocal as db:
-        stmt = select(Models).where(Models.model_is == payload.model)
+        input_tokens = len(payload.prompt.split())
+        #get model with model_id == payload.model to check provider and for usage records 
+        stmt = select(Models).where(Models.model_id == payload.model)
         result = await db.execute(stmt)
         model = result.scalar_one_or_none()
-        max_tkn_schema = model.max_token_schema
-        prompt = payload.prompt
-        max_tokens = payload.max_tokens
-        #check quota balance
+        #check quota balance and adjust max-tokens
         stmt = select(func.sum(UsageRecords.prompt_tokens + UsageRecords.completion_tokens)).where(
-            UsageRecords.api_key_id == api_key.id,
-        )
+                UsageRecords.api_key_id = api_key.id,
+                UsageRecords.requested_at > func.now() - timedelta(days=1),
+            )
         result = await db.execute(stmt)
-        total_ledger_sum = result.scalar()
-        if total_ledger_sum is None:
-        total_ledger_sum = 0
-        prompt_tokens = len(prompt.split())
-        if (total_ledger_sum + prompt_tokens) >= api_key.daily_quota:
+        token_ledger_sum = result.scalar()
+        if token_ledger_sum >= api_key.daily_quota or token_ledger_sum + input_tokens >= api_keys.daily_quota:
             raise HTTPException(
                 status_code=429,
-                detail='quota limit exceeded',
+                detail="quota limit exceeded",
             )
-        remaining_quota = api_key.daily_quota - (total_ledger_sum + prompt_tokens)
-        max_tokens = min(max_tokens,remaining_quota)
+        quota_remaining = (token_ledger_sum + input_tokens) - api_key.daily_quota
+        max_tokens = min(payload.max_tokens,quota_remaining)
+        payload.max_tokens = max_tokens
+        if payload.conersation_id is not None:
+            #create a list[dict[str,str]] to pass in as chat history
+            stmt = select(Messages).where(Messages.conversation_id == )
+    #check model_provider and pass it to its func
+    if model.provider == 'openai':  
+        if payload.conversation_id is None:
+            output = await open_ai(payload) # get chat response
+            output_text = output.choices[0].message.content or ""
+            usage = output.usage
+            input_tokens = usage.prompt_tokens
+            output_tokens = usage.completion_tokens
+                
+                
+            
+
+        
+
         
         
          
