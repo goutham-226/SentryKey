@@ -207,7 +207,7 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
   -H 'Authorization: Bearer kq_z9_Nuql9B9YsDYmhBfWPvBLvlCeXzIU' \
   -H 'Content-Type: application/json' \
   -d '{
-        "model": "deepseek-ai/deepseek-v3",
+        "model": "gpt-5.6-luna",
         "prompt": "Explain the computer programs written for the Apollo moon landing",
         "max_tokens": 512
       }'
@@ -215,7 +215,7 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 
 ```json
 {
-  "model": "deepseek-ai/deepseek-v3",
+  "model": "gpt-5.6-luna",
   "output": "The Apollo Guidance Computer ran software written in...",
   "prompt_tokens": 16,
   "completion_tokens": 498,
