@@ -4,7 +4,7 @@
 
 **A multi-provider AI gateway with metered access, tiered models, and persistent conversation memory.**
 
-One endpoint in front of nine models across six providers. Authenticates by API key,
+One endpoint in front of nine models across three providers. Authenticates by API key,
 enforces a daily token budget, and carries a conversation across model switches.
 
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
@@ -38,22 +38,20 @@ inference call: who is asking, whether they are entitled to that model, how much
 spent today, and what the conversation so far consisted of.
 
 Access is tiered, and enforced at the gateway rather than trusted to the client. Each plan
-unlocks its own set of models — a plan reaches the models listed under it, not the ones
-under other tiers.
-
+unlocks its own set of models — a plan reaches the models listed under it and models listed in lower tiers.
 | Tier | Provider | Model | Context |
 | :--- | :--- | :--- | ---: |
-| **Premium** | ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white) | GPT-5.6 Terra | 1,050,000 |
-| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white) | Claude Sonnet 5 | 1,000,000 |
-| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3.1 Pro | 1,048,576 |
-| **Pro** | ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white) | o4-mini | 200,000 |
-| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white) | Claude Haiku 4.5 | 200,000 |
-| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3 Flash | 1,048,576 |
-| **Basic** | ![Meta](https://img.shields.io/badge/Meta-0081FB?style=flat&logo=meta&logoColor=white) | Llama 4 Maverick | 1,000,000 |
-| | ![Qwen](https://img.shields.io/badge/Qwen-615CED?style=flat&logo=alibabacloud&logoColor=white) | Qwen3 235B Instruct | 262,144 |
-| | ![DeepSeek](https://img.shields.io/badge/DeepSeek-4D6BFE?style=flat&logo=deepseek&logoColor=white) | DeepSeek V3 | 128,000 |
+| **Premium** | ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white) | GPT-5.6 Sol | 1M+ |
+| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white) | Claude Opus 5 | 1M+ |
+| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3.1 Pro | 1M+ |
+| **Pro** | ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white) | GPT-5.6 Terra | 1M+ |
+| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white) | Claude Sonnet 5 | 1M+ |
+| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3.5 Flash | 1M+ |
+| **Basic** |![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white)  | GPT-5.6 Luna | 1M+ |
+| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white)  | Claude Haiku 4.5 | 200k|
+| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3.5 Flash-Lite | 1M+|
 
-All nine are served through Replicate. Every tier gets the same 100,000 token daily budget —
+All nine are served through their respective developer portals except for Gemini-3.1-pro which is served through Replicate. Every tier gets the same 100,000 token daily budget —
 the plan buys capability, not volume. The catalog lives in the database, so adding a model,
 moving one between tiers or pulling one during an incident is an `UPDATE` rather than a
 deploy.
