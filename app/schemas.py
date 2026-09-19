@@ -38,6 +38,7 @@ class ChatRequest(BaseModel):
     model: str
     max_tokens: int
     conversation_id: int | None
+  
 
 class ChatResponse(BaseModel):
     model: str

@@ -15,7 +15,7 @@ async def main():
         stmt = select(SubscriptionTiers.id).where(SubscriptionTiers.name == 'Premium')
         result = await db.execute(stmt)
         premium_id = result.scalar_one_or_none()
-        # seeding premium model gpt-5.6 terra
+        # seeding premium model gpt-5.6 
         model = Models(model_id='gpt-5.6-sol',
                        provider='openai',
                        display_name='GPT-5.6 Sol',
