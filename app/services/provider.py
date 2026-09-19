@@ -67,8 +67,24 @@ async def  get_response(api_key: ApiKeys, payload: ChatRequest) -> ChatResponse:
             input_tokens = usage.prompt_tokens
             output_tokens = usage.completion_tokens
                 
-                
-            
+
+'''
+TO-DO:
+
+-> Plan and update db schema with new features like multi provider instead of replicate and use context-window-budget.
+-> add model call error handling and manage network time-outs gracefully.
+-> handle parsing previous messages and create a dict with the right format for each provider
+
+'''
+
+
+
+
+
+
+
+
+
 
         
 
