@@ -47,6 +47,7 @@ class ChatResponse(BaseModel):
     completion_tokens: int
     quota_remaining: int
     conversation_id: int
+    error_detail: str | None
 
 
 
