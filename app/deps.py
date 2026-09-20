@@ -18,6 +18,7 @@ async def get_bearer_key(credentials: HTTPAuthorizationCredentials|None = Depend
             status_code=401,
             detail='Unauthorized',
         )
+    #check auth priviliges
     raw_key = credentials.credentials
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     stmt = select(ApiKeys).where(ApiKeys.key_hash == key_hash)
@@ -28,11 +29,13 @@ async def get_bearer_key(credentials: HTTPAuthorizationCredentials|None = Depend
             status_code=401,
             detail='Unauthorized',
         )
+    #get the user using api_key
     stmt = select(Users).where(
         Users.api_key_id == api_key.id,
     )
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
+    #get tier_id that the user has subscribed to 
     stmt = select(Subscriptions.tier_id).where(
         Subscriptions.user_id == user.id,
         Subscriptions.period_end > func.now(),    
@@ -44,6 +47,7 @@ async def get_bearer_key(credentials: HTTPAuthorizationCredentials|None = Depend
             status_code=403,
             detail="user has no active subscriptions.",
         )
+    #get model
     stmt = select(Models).where(Models.model_id == payload.model)
     result = await db.execute(stmt)
     model = result.scalar_one_or_none()
@@ -52,12 +56,15 @@ async def get_bearer_key(credentials: HTTPAuthorizationCredentials|None = Depend
             status_code=404,
             detail='model not found',
         )
+    # tier_id to get rank
     stmt = select(SubscriptionTiers.rank).where(Subscriptions.id == tier_id)
     result = await db.execute(stmt)
     user_rank = result.scalar_one_or_none() # users tier rank if rank > than model's min_tier rank then user has privilige
+    # get tier rank for user's model choice
     stmt = select(SubscriptionTiers.rank).where(Susbcriptions.id == model.min_tier_id)
     result = await db.execute(stmt)
     model_rank = result.scalar_one_or_none()
+    #check if user is on authorized tier rank
     if not user_rank >= model_rank:
         raise HTTPException(
             status_code=403,

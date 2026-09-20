@@ -13,6 +13,7 @@ import hashlib
 from app.security import hash_password,verify_password
 from app.deps import get_current_user, get_bearer_key
 from decimal import Decimal
+from app.services.provider import get_response
 
 app = FastAPI(title="key & quota service",version="0.1.0")
 
@@ -149,9 +150,12 @@ async def subscribtions(payload: SubscribeCatalog,user: Users = Depends(get_curr
     
 
 @app.post('/v1/chat/completions',response_model=ChatResponse) # default status - 200 OK
-async def chat_completions(payload: ChatRequest,user_model: Models = Depends(get_bearer_key),db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings)):
-    # add privilige check within get_bearer_key 
-    # pass api_key to service
+async def chat_completions(payload: ChatRequest,api_key: ApiKeys = Depends(get_bearer_key)):
+    #privilige check is embeded into dependency func.
+    chat_response = get_response(api_key,payload) #db reads and writes happen within the function
+    return chat_response
+
+
    
     
 
