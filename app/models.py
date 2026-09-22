@@ -41,8 +41,7 @@ class UsageRecords(Base):
     status: Mapped[str] = mapped_column(Text)
     requested_at: Mapped[datetime] = mapped_column(server_default=func.now())
     status_code: Mapped[int] = mapped_column(SmallInteger)
-    latency_ms: Mapped[int] = mapped_column(Integer)
-    cost_usd: Mapped[Decimal|None] = mapped_column(Numeric(12,6))
+
 
 class SubscriptionTiers(Base):
     __tablename__ = 'subscription_tiers'
