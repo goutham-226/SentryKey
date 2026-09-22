@@ -264,6 +264,10 @@ async def get_response(api_key: ApiKeys,payload: ChatRequest) -> ChatResponse:
         ) # func.coalesce returns 0 if today's usage records are None
         result = await db.execute(stmt)
         token_count = result.scalar()
+        if token_count is None:
+            token_count = 0
+        else:
+            token_count = int(token_count)
         # if token_count is greater than daily_quota raise 429
         if token_count > api_key.daily_quota :
             raise HTTPException(
@@ -290,9 +294,10 @@ async def get_response(api_key: ApiKeys,payload: ChatRequest) -> ChatResponse:
             )
             result = await db.execute(stmt)
             conversation = result.scalar_one_or_none()
-            stmt = select(Messages).where(Messages.conversation_id == conversation.id ).order_by(desc(Messages.created_on))
-            result = await db.execute(stmt)
-            conversation_history = result.scalars().all() # an iterable list of ORM objects.
+            if conversation is not None:
+                stmt = select(Messages).where(Messages.conversation_id == conversation.id ).order_by(desc(Messages.created_on))
+                result = await db.execute(stmt)
+                conversation_history = result.scalars().all() # an iterable list of ORM objects.
         # check if there are available context tokens and return how many
         stmt = select(func.coalesce(func.sum(UsageRecords.context_tokens))).where(
             UsageRecords.api_key_id == api_key.id,
@@ -301,6 +306,10 @@ async def get_response(api_key: ApiKeys,payload: ChatRequest) -> ChatResponse:
         # sum of context_tokens on today's usage record row
         result = await db.execute(stmt)
         context_sum = result.scalar()
+        if context_sum is None:
+            context_sum = 0
+        else:
+            context_sum = int(context_sum)
         available_context_tokens = api_key.daily_context_quota - context_sum
 
         #end of db reads
