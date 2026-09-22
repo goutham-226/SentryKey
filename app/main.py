@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, status, Depends, Header
-from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, PublicCatalog, UserSubscribe, SubscribeCatalog, ChatRequest, ChatResponse
+from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, PublicCatalog, UserSubscribe, SubscribeCatalog, ChatRequest, ChatResponse, ChatHistoryResponse
 from app.config import Settings, get_settings
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,7 @@ from sqlalchemy import func, select, update, text, Date
 import secrets
 import hashlib
 from app.security import hash_password,verify_password
-from app.deps import get_current_user, get_bearer_key
+from app.deps import get_current_user, get_bearer_key, bearer_auth
 from decimal import Decimal
 from app.services.provider import get_response
 
@@ -157,13 +157,39 @@ async def chat_completions(payload: ChatRequest,api_key: ApiKeys = Depends(get_b
 
 
    
-    
 
-'''
-/v1/chat/completions is the first version of the endpoint
-this will eventually be cleaned up with separate service modules
-and privilige access embeded into get_key function.
-'''
+@app.get('/v1/chat-history/{conversation_id}', response_model=list[ChatHistoryResponse])
+async def get_chat_history(conversation_id: int, api_key: ApiKeys = Depends(bearer_auth), db: AsyncSession = Depends(get_db)):
+    stmt = select(Conversations).where(
+        Conversations.api_key_id == api_key.id,
+        Conversations.id == conversation_id,
+    )
+    result = await db.execute(stmt)
+    conversation = result.scalar_one_or_none()
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No conversation found",
+        )
+    stmt = select(Messages).where(
+        Messages.conversation_id == conversation.id,
+    )
+    result = await db.execute(stmt)
+    message = result.scalars().all()
+    if message is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No messages found",
+        )
+    history = [ChatHistoryResponse(
+        conversation_id = m.conversation_id,
+        role= m.role,
+        message= m.content,
+        model= m.model,
+        timestamp=m.created_on,
+    ) for m in message]
+    return history
+
 
 
 

@@ -85,6 +85,7 @@ class Messages(Base):
     id: Mapped[int] = mapped_column(BigInteger,primary_key=True)
     conversation_id: Mapped[int] = mapped_column(BigInteger,ForeignKey('conversations.id',ondelete='CASCADE'))
     role: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(server_default='unknown')
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer)
     created_on: Mapped[datetime ] = mapped_column(server_default=func.now())

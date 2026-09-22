@@ -12,6 +12,26 @@ import hashlib
 basic = HTTPBasic()
 bearer = HTTPBearer()
 
+
+async def bearer_auth(credentials: HTTPAuthorizationCredentials | None = Depends(bearer), db: AsyncSession = Depends(get_db)) -> ApiKeys:
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail='Unauthorized',
+        )
+    raw_key = credentials.credentials
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    stmt = select(ApiKeys).where(ApiKeys.key_hash == key_hash)
+    result = await db.execute(stmt)
+    api_key = result.scalar_one_or_none()
+    if api_key is None or api_key.revoked_on is not None:
+        raise HTTPException(
+            status_code=401,
+            detail='Unauthorized',
+        )
+    return api_key
+
+
 async def get_bearer_key(payload: ChatRequest,credentials: HTTPAuthorizationCredentials|None = Depends(bearer),db: AsyncSession = Depends(get_db)) -> ApiKeys:
     if credentials is None:
         raise HTTPException(

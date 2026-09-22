@@ -50,7 +50,12 @@ class ChatResponse(BaseModel):
     error_detail: str | None
 
 
-
+class ChatHistoryResponse(BaseModel):
+    conversation_id: int
+    role: str
+    message: str
+    model: str
+    timestamp: datetime
 
 
 

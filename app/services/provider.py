@@ -20,7 +20,7 @@ How to handle Exceptions and Manage Being Billed on Network Timeouts:
 ====================================================================
 
 OpenAI :
-------
+======
 Sometimes OpenAI SDK can raise Errors and some of these Errors are billable i.e. the tokens
 have been processed in such cases we need to handle token counting and ledgering
 so we don't lose money on Network errors.
@@ -66,9 +66,6 @@ asyncio.CancelledError from a client disconnect (once you're actually streaming 
 Raw httpx exceptions that escape the SDK's wrapping mid-stream
 
 
-
-
-
 Context-Window-Budget Handling: [message/conversation History] [OpenAI]
 ==============================
 #   Context_tokens keeps a track of the sum of the content tokens + role tokens,
@@ -107,7 +104,7 @@ Anthropic:
 - Think of rate limiting logic for Anthropic models
 - Implement rate-limiting
 - Handle Exceptions 
-- Finish get_antrhopic response and make it work with no errors
+- Finish get_anthropic_response and make it work with no errors
 
 """
 from dataclasses import dataclass
@@ -369,6 +366,7 @@ async def get_response(api_key: ApiKeys,payload: ChatRequest) -> ChatResponse:
         user_message = Messages(
             conversation_id = conversation.id,
             role = 'user',
+            model = model_name,
             content = payload.prompt,
             token_count=prompt_tokens,
         )
@@ -377,6 +375,7 @@ async def get_response(api_key: ApiKeys,payload: ChatRequest) -> ChatResponse:
         assistance_message = Messages(
             conversation_id = conversation.id,
             role = 'assistant',
+            model = model_name,
             content = output,
             token_count=completion_tokens,
         )
