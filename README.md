@@ -177,6 +177,7 @@ ssh -L 8000:localhost:8000 user@host
 | 🔑 | `GET` | `/v1/keys` | List the caller's keys by prefix, with quota and revocation state. |
 | 🔑 | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if a subscription is already active. |
 | 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier, `429` once the daily budget is spent, `400` if the model's provider isn't wired up yet (Anthropic, Google). |
+| 🔐 | `GET` | `/v1/chat-history/{conversation_id}` | Full message log for a conversation owned by the caller's key. `404` if the conversation doesn't exist or belongs to a different key. |
 
 🔓 public &nbsp;&middot;&nbsp; 🔑 email and password &nbsp;&middot;&nbsp; 🔐 `Authorization: Bearer <key>`
 
@@ -240,6 +241,36 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 
 `max_tokens` is clamped to the remaining daily budget before the request reaches the
 provider, so a single call cannot overrun the quota by more than its own prompt.
+
+**4. Pull the conversation back.**
+
+```bash
+curl http://127.0.0.1:8000/v1/chat-history/1 \
+  -H 'Authorization: Bearer kq_z9_Nuql9B9YsDYmhBfWPvBLvlCeXzIU'
+```
+
+```json
+[
+  {
+    "conversation_id": 1,
+    "role": "user",
+    "message": "Explain the computer programs written for the Apollo moon landing",
+    "model": "gpt-5.6-luna",
+    "timestamp": "2026-09-22T17:22:31.016184Z"
+  },
+  {
+    "conversation_id": 1,
+    "role": "assistant",
+    "message": "The Apollo Guidance Computer ran software written in...",
+    "model": "gpt-5.6-luna",
+    "timestamp": "2026-09-22T17:22:33.512009Z"
+  }
+]
+```
+
+Scoped to the bearer key that owns the conversation — a `404` either way if it doesn't
+exist or belongs to someone else, so the endpoint never confirms another key's conversation
+ids exist.
 
 ## Data model
 
