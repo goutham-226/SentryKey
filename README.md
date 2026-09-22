@@ -51,10 +51,13 @@ unlocks its own set of models — a plan reaches the models listed under it and 
 | | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white)  | Claude Haiku 4.5 | 200k|
 | | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3.5 Flash-Lite | 1M+|
 
-All nine are served through their respective developer portals except for Gemini-3.1-pro which is served through Replicate. Every tier gets the same 100,000 token daily budget —
-the plan buys capability, not volume. The catalog lives in the database, so adding a model,
-moving one between tiers or pulling one during an incident is an `UPDATE` rather than a
-deploy.
+Every tier gets the same 100,000 token daily budget — the plan buys capability, not volume.
+The catalog lives in the database, so adding a model, moving one between tiers or pulling
+one during an incident is an `UPDATE` rather than a deploy.
+
+OpenAI models are wired up end-to-end today, streamed directly against the OpenAI SDK with
+per-chunk token accounting. Anthropic and Google are catalogued and gated by tier already,
+but return `400 provider not available at the moment` until their provider clients land.
 
 Because history lives in the gateway rather than the client, a conversation is portable
 across models. Start on one model, continue on another, and the thread comes with you.
@@ -76,10 +79,15 @@ flowchart TB
     end
 
     PG[("PostgreSQL<br/>users · keys · subscriptions<br/>usage · conversations · messages")]
-    UP["Replicate<br/>9 models"]
+    OAI["OpenAI SDK<br/>streaming"]
+    ANT["Anthropic<br/>not wired yet"]
+    GEM["Google<br/>not wired yet"]
 
-    C -->|Bearer key| AUTH --> ENT --> QUOTA --> CTX --> PROV --> UP
-    PROV --> METER --> C
+    C -->|Bearer key| AUTH --> ENT --> QUOTA --> CTX --> PROV
+    PROV -->|provider = openai| OAI
+    PROV -.->|provider = anthropic| ANT
+    PROV -.->|provider = google| GEM
+    OAI --> METER --> C
 
     AUTH -.-> PG
     ENT -.-> PG
@@ -117,6 +125,12 @@ mid-thread is a supported operation rather than a corruption.
 
 **Schema changes go through migrations.** Every table is defined by a reversible Alembic
 revision. No table is altered by hand, in any environment.
+
+**Streaming is billed by what actually happened, not by the request.** A provider call can
+fail before, during or after tokens were generated, and each of those is billed differently.
+Errors raised before the first chunk arrives are free; a stream interrupted mid-generation
+still charges for what was produced, plus a fixed buffer, because the provider already did
+the work. The response is only ever built from tokens the stream actually returned.
 
 ## Running it
 
@@ -162,7 +176,7 @@ ssh -L 8000:localhost:8000 user@host
 | 🔑 | `POST` | `/v1/keys` | Issue an API key. The raw value is returned **once**. |
 | 🔑 | `GET` | `/v1/keys` | List the caller's keys by prefix, with quota and revocation state. |
 | 🔑 | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if a subscription is already active. |
-| 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier, `429` once the daily budget is spent. |
+| 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier, `429` once the daily budget is spent, `400` if the model's provider isn't wired up yet (Anthropic, Google). |
 
 🔓 public &nbsp;&middot;&nbsp; 🔑 email and password &nbsp;&middot;&nbsp; 🔐 `Authorization: Bearer <key>`
 
@@ -257,10 +271,13 @@ never rewrites history.
 │   ├── deps.py            Auth dependencies — password and API key
 │   ├── security.py        Password hashing, key generation
 │   ├── models.py          SQLAlchemy ORM — the database schema
-│   └── schemas.py         Pydantic — the API contract
+│   ├── schemas.py         Pydantic — the API contract
+│   └── services/
+│       └── provider.py    Per-provider inference calls, context budgeting, billing-safe streaming
 ├── alembic/versions/      One reversible revision per schema change
 ├── scripts/               Catalog seeding
 ├── sql/                   The original hand-written schema and reporting queries
+├── docs/                  Dev notes on provider SDKs and error-handling design
 ├── docker-compose.yaml    PostgreSQL 17, named volume, health check
 └── requirements.txt
 ```
