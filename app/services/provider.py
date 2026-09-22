@@ -97,9 +97,17 @@ Context-Window-Budget Handling: [message/conversation History] [OpenAI]
 TO_DO:
 -----
 - Implement context_window rate limit logic - completed
+- Finish OpenAI response func and make /v1/chat/completions of Sentrykey work with no errors - completed
 
-- Finish OpenAI response func and make /v1/chat/completions of Sentrykey work with no errors
-- Think of rate limiting logic for Google or anthropic models
+TASKS PENDING:
+-------------
+
+Anthropic:
+==========
+- Think of rate limiting logic for Anthropic models
+- Implement rate-limiting
+- Handle Exceptions 
+- Finish get_antrhopic response and make it work with no errors
 
 """
 from dataclasses import dataclass
