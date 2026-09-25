@@ -170,16 +170,16 @@ ssh -L 8000:localhost:8000 user@host
 
 | | Method | Path | Description |
 | :---: | :--- | :--- | :--- |
-| ![Public](https://img.shields.io/badge/auth-public-brightgreen) |`GET` | `/health` | Liveness probe. Unversioned — infrastructure, not API surface. |
-| ![Public](https://img.shields.io/badge/auth-public-brightgreen)| `POST` | `/v1/auth/register` | Create an account. `409` on a duplicate email. |
-| ![Public](https://img.shields.io/badge/auth-public-brightgreen) | `GET` | `/v1/models-catalog` | The public catalog: every active model and the plan it needs. |
-| ![Auth](https://img.shields.io/badge/auth-password-orange) | `POST` | `/v1/keys` | Issue an API key. The raw value is returned **once**. |
-| ![Auth](https://img.shields.io/badge/auth-password-orange) | `GET` | `/v1/keys` | List the caller's keys by prefix, with quota and revocation state. |
-| ![Auth](https://img.shields.io/badge/auth-password-orange) | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if a subscription is already active. |
-| ![API Key](https://img.shields.io/badge/auth-bearer_token-blue) | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier, `429` once the daily budget is spent, `400` if the model's provider isn't wired up yet (Anthropic, Google). |
-| ![API Key](https://img.shields.io/badge/auth-bearer_token-blue) | `GET` | `/v1/chat-history/{conversation_id}` | Full message log for a conversation owned by the caller's key. `404` if the conversation doesn't exist or belongs to a different key. |
+|🔓 |`GET` | `/health` | Liveness probe. Unversioned — infrastructure, not API surface. |
+|🔓| `POST` | `/v1/auth/register` | Create an account. `409` on a duplicate email. |
+|🔓| `GET` | `/v1/models-catalog` | The public catalog: every active model and the plan it needs. |
+| 🔑 | `POST` | `/v1/keys` | Issue an API key. The raw value is returned **once**. |
+| 🔑| `GET` | `/v1/keys` | List the caller's keys by prefix, with quota and revocation state. |
+| 🔑 | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if a subscription is already active. |
+| 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier, `429` once the daily budget is spent, `400` if the model's provider isn't wired up yet (Anthropic, Google). |
+| 🔐| `GET` | `/v1/chat-history/{conversation_id}` | Full message log for a conversation owned by the caller's key. `404` if the conversation doesn't exist or belongs to a different key. |
 
-![Public](https://img.shields.io/badge/auth-public-brightgreen) &nbsp;&middot;&nbsp;  ![Auth](https://img.shields.io/badge/auth-password-orange) &nbsp;&middot;&nbsp; ![API Key](https://img.shields.io/badge/auth-bearer_token-blue)`Authorization: Bearer <key>`
+🔓 ![Public](https://img.shields.io/badge/auth-public-brightgreen) &nbsp;&middot;&nbsp; 🔑  ![Auth](https://img.shields.io/badge/auth-password-orange) &nbsp;&middot;&nbsp; 🔐 ![API Key](https://img.shields.io/badge/auth-bearer_token-blue)
 
 
 Two credentials, deliberately. Key management and billing require the account password,
