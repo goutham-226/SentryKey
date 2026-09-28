@@ -70,29 +70,27 @@ flowchart TB
 
     subgraph GW["SentryKey"]
         direction TB
-        AUTH["Auth<br/>hash → key → user"]
-        ENT["Entitlement<br/>subscription → tier → model"]
-        QUOTA["Quota<br/>tokens used today"]
-        CTX["Context assembly<br/>history to token budget"]
+        AUTH["Auth<br/>key hash → api_key → user"]
+        ENT["Entitlement<br/>subscription tier ≥ model tier"]
+        QUOTA["Quota<br/>tokens used in last 24h"]
+        CTX["Context<br/>history up to 1000 tokens"]
         PROV["Provider client"]
-        METER["Usage record"]
     end
 
-    PG[("PostgreSQL<br/>users · keys · subscriptions<br/>usage · conversations · messages")]
-    OAI["OpenAI SDK<br/>streaming"]
+    OAI["OpenAI"]
     ANT["Anthropic<br/>not wired yet"]
     GEM["Google<br/>not wired yet"]
+    METER["Save<br/>messages + usage record"]
+    R[Client response]
+    PG[("PostgreSQL")]
 
     C -->|Bearer key| AUTH --> ENT --> QUOTA --> CTX --> PROV
-    PROV -->|provider = openai| OAI
-    PROV -.->|provider = anthropic| ANT
-    PROV -.->|provider = google| GEM
-    OAI --> METER --> C
+    PROV -->|openai| OAI
+    PROV -.->|anthropic| ANT
+    PROV -.->|google| GEM
+    OAI --> METER -->|JSON| R
 
-    AUTH -.-> PG
-    ENT -.-> PG
-    QUOTA -.-> PG
-    CTX -.-> PG
+    GW -.-> PG
     METER -.-> PG
 ```
 
