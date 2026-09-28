@@ -95,7 +95,7 @@ async def get_keys(user: Users = Depends(get_current_user), db: AsyncSession = D
     stmt = select(ApiKeys).where(ApiKeys.user_id == user.id)
     result = await db.execute(stmt)
     apikey = result.scalars().all()
-    if apikey is None:
+    if apikey == []:
         raise HTTPException(
             status_code=404,
             detail="No API keys Found",

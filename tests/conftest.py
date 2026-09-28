@@ -125,6 +125,25 @@ async def user(client):
     assert response.status_code == 201
     return credentials
 
+"""
+Add a fixture, with function scope to
+create an api_key to test other endpoints.
+"""
+@pytest.fixture
+async def api_key(client,user):
+    email = user['email']
+    password = user['password']
+    
+    # create an api_key
+    request = {'email':email,'password':password}
+    response = await client.post('/v1/keys',json=request)
+    body = response.json()
+    raw_key = body['api_key']
+    
+    return raw_key
+
+
+
 
 
 
