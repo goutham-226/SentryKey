@@ -155,11 +155,7 @@ curl http://127.0.0.1:8000/health
 # {"status":"ok"}
 ```
 
-Developing over SSH? Forward the port rather than binding to `0.0.0.0`:
 
-```bash
-ssh -L 8000:localhost:8000 user@host
-```
 
 ## API
 
