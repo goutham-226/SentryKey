@@ -114,7 +114,16 @@ async def client():
     async with AsyncClient(transport=transport,base_url='http://test') as client:
         yield client # send the client to the caller function and wait while it runs
 
-
+"""
+Add a fixture, with function scope to
+register a User to test other endpoints.
+"""
+@pytest.fixture
+async def user(client):
+    credentials = {'email':'test_user@email.com','name':'test_user','password':'password12345'}
+    response = await client.post('/v1/auth/register',json=credentials)
+    assert response.status_code == 201
+    return credentials
 
 
 
