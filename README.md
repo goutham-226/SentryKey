@@ -264,6 +264,72 @@ Scoped to the bearer key that owns the conversation — a `404` either way if it
 exist or belongs to someone else, so the endpoint never confirms another key's conversation
 ids exist.
 
+**5. Switch models mid-conversation.** Send the same `conversation_id` with a different
+`model`. The conversation carries on, and the new model receives the earlier turns as context.
+
+Entitlement is checked on every request against the model named in that request, not the one
+the conversation started on. Asha is on Basic, so moving up to `gpt-5.6-terra` is refused:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Authorization: Bearer kq_z9_Nuql9B9YsDYmhBfWPvBLvlCeXzIU' \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "model": "gpt-5.6-terra",
+        "prompt": "Which language was that software written in?",
+        "max_tokens": 512,
+        "conversation_id": 1
+      }'
+```
+
+```json
+{
+  "detail": "user lacks privilege"
+}
+```
+
+| Tier    | GPT models available                           |
+|---------|------------------------------------------------|
+| Basic   | `gpt-5.6-luna`                                 |
+| Pro     | `gpt-5.6-luna`, `gpt-5.6-terra`                |
+| Premium | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` |
+
+On a Pro subscription, the same request goes through and the reply is added to conversation `1`:
+
+```json
+{
+  "model": "gpt-5.6-terra",
+  "output": "The AGC software was written in an assembly language...",
+  "prompt_tokens": 531,
+  "completion_tokens": 402,
+  "quota_remaining": 98553,
+  "conversation_id": 1
+}
+```
+
+How the history is carried over:
+
+- The gateway loads the conversation's messages newest first. It keeps as many as fit in the
+  context budget: 1,000 tokens per request, or less if the key's remaining daily context quota
+  is lower. The message that crosses the limit is trimmed rather than dropped. The kept messages
+  are then sent oldest to newest, followed by the new prompt.
+- Messages are sent as plain `role` + `content`, and the model that produced each one isn't
+  passed along. The new model sees the earlier assistant turns as if it had written them itself.
+- The history counts toward `prompt_tokens`, which is why that figure jumps from 16 to 531.
+  So continuing a conversation costs more of the daily token quota than starting a new one.
+  The history tokens also count against the key's separate daily context quota.
+- Every message stores the model that produced it, so `/v1/chat-history/1` shows where the
+  switch happened:
+
+```json
+[
+  { "conversation_id": 1, "role": "user",      "message": "Explain the computer programs...", "model": "gpt-5.6-luna",  "timestamp": "..." },
+  { "conversation_id": 1, "role": "assistant", "message": "The Apollo Guidance Computer...",  "model": "gpt-5.6-luna",  "timestamp": "..." },
+  { "conversation_id": 1, "role": "user",      "message": "Which language was that...",      "model": "gpt-5.6-terra", "timestamp": "..." },
+  { "conversation_id": 1, "role": "assistant", "message": "The AGC software was written...", "model": "gpt-5.6-terra", "timestamp": "..." }
+]
+```
+
 ## Data model
 
 ```
