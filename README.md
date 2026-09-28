@@ -93,10 +93,7 @@ flowchart TB
     GW -.-> PG
     METER -.-> PG
 ```
-
-Authentication, entitlement and quota run as dependencies before the handler is reached, so
-no upstream call is ever made on behalf of a caller who was never going to be allowed one.
-Every path through the gateway — including the rejections — writes a usage record.
+Authentication and entitlement run as a FastAPI dependency before the handler is reached, and the quota check runs before any provider call, so no upstream request is ever made for a caller who isn't allowed one. Every request that reaches a provider writes a usage record, including ones that fail mid-stream, so partially generated tokens are still billed.
 
 ## Design
 
