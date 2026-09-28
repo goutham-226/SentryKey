@@ -37,7 +37,7 @@ class ChatRequest(BaseModel):
     prompt: str
     model: str
     max_tokens: int
-    conversation_id: int | None
+    conversation_id: int | None = None
   
 
 class ChatResponse(BaseModel):
