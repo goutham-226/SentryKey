@@ -5,16 +5,18 @@ import os
 # set your test database url
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://kq:kq@localhost:5432/sk_test"
 
-# import pytest dependencies
+# import pytest objects
 import pytest
 from httpx import AsyncClient, ASGITransport
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
 
-#import dependencies from app
+#import app objects
 from app.main import app
 from app.db import engine
+
+
 
 """
 Pytest:
@@ -40,6 +42,10 @@ method upgrade_migrations updates our alembic/env.py with our test db url
 every thing before yield is ran before any test function,
 we want our database url to be updated before any test function 
 ever runs to avoid making changes to our main database.
+
+Seed your model Tables with models from your scripts folder.
+-> import the function and run it.
+
 """
 
 @pytest.fixture(scope="session",autouse=True)
@@ -141,6 +147,48 @@ async def api_key(client,user):
     raw_key = body['api_key']
     
     return raw_key
+
+"""
+Add fixture for subscriped_user.
+"""
+def subscribed_user(client):
+    async def _subscribed_user(tier: str):
+        # register a new user
+        email = 'user@email.com'
+        name = 'user'
+        password = 'password123'
+        credentials = {'email':email,'name':name,'password':password}
+        response = await client.post('/v1/auth/register',json=credentials)
+        
+	# subscribe to 'tier' with user creds
+        request = {'tier':tier}
+        response = await client.post('/v1/subscriptions',json=request,auth=(email,password))
+        
+        return credentials
+    return _subscribed_user
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
