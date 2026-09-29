@@ -386,6 +386,33 @@ Input and output schemas are kept separate throughout. A client cannot set a ser
 field, because no such field exists on the input model; a secret cannot leak, because the
 response model does not declare it. Both hold by construction rather than by review.
 
+## Known Flaws
+
+### Race condition on concurrent requests (read-modify-write)
+
+When two requests from the same user or API key arrive at nearly the same time, both read the current value from the database (for example, remaining quota or usage) before either one writes its update. Each request sees the same unmodified value, passes the same check, and writes its result based on that stale read.
+
+**Example:**
+
+1. Request A reads `remaining = 1`
+2. Request B reads `remaining = 1`, before A has written anything
+3. Both pass the `remaining > 0` check and call the provider
+4. Both write `remaining = 0`
+
+Result: two requests were served against one unit of quota. One decrement was lost (a *lost update*), so the recorded usage is lower than the real usage.
+
+**Why it happens:** the check and the update are two separate statements inside a transaction running at PostgreSQL's default `READ COMMITTED` isolation level. That level does not stop another transaction from reading the same row between those two statements.
+
+**Impact:** a client that fires parallel requests can go over its quota, and usage or billing records can undercount. The risk increases with concurrency.
+
+**Possible fixes (not yet implemented):**
+- **Row lock:** `SELECT ... FOR UPDATE` on the row being checked, so concurrent requests queue up behind each other
+- **Atomic conditional update:** do the check and the write in one statement, for example `UPDATE ... SET remaining = remaining - 1 WHERE id = :id AND remaining > 0 RETURNING remaining`. If zero rows come back, the request is rejected.
+- **Stricter isolation:** run the transaction at `SERIALIZABLE` and retry on serialization failures
+- **Atomic counter outside Postgres:** use a Redis `INCR`/`DECR` for the fast-path quota check, and reconcile with Postgres afterward
+
+**Test gap:** the current suite runs requests one at a time, so this bug is never exercised. A regression test would fire N concurrent requests with `asyncio.gather` against a key with a quota below N, then assert that no more than the quota succeeded.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
