@@ -354,26 +354,32 @@ never rewrites history.
 ```
 .
 ├── app/
-│   ├── main.py              Routes
-│   ├── config.py            Settings from the environment
-│   ├── db.py                Async engine, session factory, get_db
-│   ├── deps.py              Auth dependencies — password and API key
-│   ├── security.py          Password hashing
-│   ├── models.py            SQLAlchemy ORM — the database schema
-│   ├── schemas.py           Pydantic — the API contract
+│   ├── main.py                  Routes
+│   ├── config.py                Settings from the environment
+│   ├── db.py                    Async engine, session factory, get_db
+│   ├── deps.py                  Auth dependencies — password and API key
+│   ├── security.py              Password hashing
+│   ├── models.py                SQLAlchemy ORM — the database schema
+│   ├── schemas.py               Pydantic — the API contract
 │   └── services/
-│       └── provider.py      Per-provider inference calls, context budgeting, billing-safe streaming
+│       └── provider.py          Per-provider inference calls, context budgeting, billing-safe streaming
 ├── tests/
-│   ├── conftest.py          Fixtures — test DB override, migrations, per-test cleanup, async client
-│   └── test_health.py       Smoke test for GET /health
-├── alembic/versions/        One reversible revision per schema change
-├── scripts/                 Catalog seeding
-├── sql/                     The original hand-written schema and reporting queries
-├── docs/                    Dev notes on provider SDKs and error-handling design
-├── docker-compose.yaml      PostgreSQL 17, named volume, health check
-├── pytest.ini               Pytest config — async mode, test paths
-├── requirements.txt         Runtime dependencies
-└── requirements-dev.txt     Runtime + test dependencies (pytest, pytest-asyncio, pytest-cov)
+│   ├── __init__.py              Marks tests as a package
+│   ├── conftest.py              Fixtures — test DB override, migrations, per-test cleanup, async client, user and API key fixtures
+│   ├── test_health.py           Smoke test for GET /health
+│   ├── test_auth.py             POST /v1/auth/register
+│   ├── test_keys.py             POST /v1/keys and GET /v1/keys
+│   ├── test_subscriptions.py    Subscription endpoints
+│   ├── test_security.py         Unit tests for password hashing
+│   └── test_schemas.py          Unit tests for Pydantic request/response validation
+├── alembic/versions/            One reversible revision per schema change
+├── scripts/                     Catalog seeding
+├── sql/                         The original hand-written schema and reporting queries
+├── docs/                        Dev notes on provider SDKs and error-handling design
+├── docker-compose.yaml          PostgreSQL 17, named volume, health check
+├── pytest.ini                   Pytest config — async mode, test paths
+├── requirements.txt             Runtime dependencies
+└── requirements-dev.txt         Runtime + test dependencies (pytest, pytest-asyncio, pytest-cov)
 ```
 
 Input and output schemas are kept separate throughout. A client cannot set a server-owned
