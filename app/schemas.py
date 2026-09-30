@@ -20,6 +20,10 @@ class KeyCreate(BaseModel):
 class KeyOut(BaseModel):
     daily_quota: int
     api_key: str
+    key_id: int
+
+class KeyRevoke(BaseModel):
+    status: str
 
 class PublicCatalog(BaseModel):
     model_name: str

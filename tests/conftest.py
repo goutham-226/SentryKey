@@ -1,6 +1,7 @@
 # tests/config.py
 
 import os
+import asyncio 
 
 # set your test database url
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://kq:kq@localhost:5432/sk_test"
@@ -16,7 +17,8 @@ from sqlalchemy import text
 from app.main import app
 from app.db import engine
 
-
+# import model seed script 
+from scripts.model_seed import seed
 
 """
 Pytest:
@@ -48,13 +50,23 @@ Seed your model Tables with models from your scripts folder.
 
 """
 
+async def seed_wrapper():
+    async with engine.begin() as db:
+        await db.execute(text('TRUNCATE models RESTART IDENTITY CASCADE'))
+    await seed()
+    await engine.dispose()
+
 @pytest.fixture(scope="session",autouse=True)
 def upgrade_migrations():
      # load alembic.ini -> it finds our migrations directory 
      alembic_config = Config("alembic.ini")
      #upgrade head using command
      command.upgrade(alembic_config,"head")
+     # upgrade alembic with new db url
+     # now seed your models table
+     asyncio.run(seed_wrapper())
      yield
+
 
 """
 Clean the database after every test:
@@ -151,6 +163,7 @@ async def api_key(client,user):
 """
 Add fixture for subscriped_user.
 """
+@pytest.fixture
 def subscribed_user(client):
     async def _subscribed_user(tier: str):
         # register a new user

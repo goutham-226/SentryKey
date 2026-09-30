@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, status, Depends, Header
-from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, PublicCatalog, UserSubscribe, SubscribeCatalog, ChatRequest, ChatResponse, ChatHistoryResponse
+from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, KeyRevoke, PublicCatalog, UserSubscribe, SubscribeCatalog, ChatRequest, ChatResponse, ChatHistoryResponse
 from app.config import Settings, get_settings
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,6 +69,7 @@ async def create_key(payload:KeyCreate,db: AsyncSession = Depends(get_db)):
     key_out = KeyOut(
         daily_quota=apikey.daily_quota,
         api_key=raw_key,
+        key_id=apikey.id,
     )
     return key_out
 
@@ -101,12 +102,22 @@ async def get_keys(user: Users = Depends(get_current_user), db: AsyncSession = D
             detail="No API keys Found",
         )
     key_out = []
+    found = False
     for key in apikey:
-        out = KeyOut(
-            daily_quota= key.daily_quota,
-            api_key= key.key_prefix,
+        if key.revoked_on is None:
+            out = KeyOut(
+            	    daily_quota= key.daily_quota,
+            	    api_key= key.key_prefix,
+            	    key_id = key.id, 
+		 )
+            key_out.append(out)
+            found = True
+    if not found:
+        raise HTTPException(
+            status_code=404,
+            detail='No active keys found',
         )
-        key_out.append(out)
+
     return key_out
 
 @app.post('/v1/subscriptions',response_model=UserSubscribe,status_code=status.HTTP_201_CREATED)
@@ -189,6 +200,41 @@ async def get_chat_history(conversation_id: int, api_key: ApiKeys = Depends(bear
         timestamp=m.created_on,
     ) for m in message]
     return history
+
+"""
+A DELETE endpoint for revoking keys.
+
+update api_key where apikey.id == key_id, apikey.user_id == user.id value revoked_on = func.now()
+if none:
+    raise(404 not found)
+
+"""
+@app.delete('/v1/keys/{key_id}',response_model=KeyRevoke) # default 200
+async def revoke_key(key_id: int,user: Users = Depends(get_current_user),db: AsyncSession = Depends(get_db)):
+    stmt = update(ApiKeys).where(
+               ApiKeys.id == key_id,
+               ApiKeys.user_id == user.id,
+             ).values(revoked_on = func.now())
+    result = await db.execute(stmt)
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=404,
+            detail='key not found',
+        )
+    await db.commit()
+    return KeyRevoke(status='success')
+
+                 
+                
+
+ 
+
+
+
+
+
+
+
 
 
 
