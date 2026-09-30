@@ -4,10 +4,10 @@
 
 **A multi-provider AI gateway with metered access, tiered models, and persistent conversation memory.**
 
-One endpoint in front of nine models across three providers. Authenticates by API key,
-enforces a daily token budget, and carries a conversation across model switches.
+A single endpoint for nine top AI models across three providers. It tracks your daily token usage, manages API keys, and seamlessly holds onto your conversation history even when you switch models mid-chat.
 
-[![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![CI](https://img.shields.io/github/actions/workflow/status/goutham-226/SentryKey/python-app.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/goutham-226/SentryKey/actions)
+[![Python](https://img.shields.io/badge/python-3.14-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Pydantic](https://img.shields.io/badge/Pydantic-E92063?style=flat-square&logo=pydantic&logoColor=white)](https://docs.pydantic.dev/)
 [![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0-D71F00?style=flat-square&logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
@@ -21,7 +21,9 @@ enforces a daily token budget, and carries a conversation across model switches.
 [Design](#design) &nbsp;&middot;&nbsp;
 [Running it](#running-it) &nbsp;&middot;&nbsp;
 [API](#api) &nbsp;&middot;&nbsp;
-[Data model](#data-model)
+[Data model](#data-model) &nbsp;&middot;&nbsp;
+[Project layout](#project-layout) &nbsp;&middot;&nbsp;
+[Known flaws](#known-flaws)
 
 </div>
 
@@ -39,17 +41,18 @@ spent today, and what the conversation so far consisted of.
 
 Access is tiered, and enforced at the gateway rather than trusted to the client. Each plan
 unlocks its own set of models — a plan reaches the models listed under it and models listed in lower tiers.
+
 | Tier | Provider | Model | Context |
 | :--- | :--- | :--- | ---: |
-| **Premium** | ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white) | GPT-5.6 Sol | 1M+ |
-| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white) | Claude Opus 5 | 1M+ |
-| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3.1 Pro | 1M+ |
-| **Pro** | ![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white) | GPT-5.6 Terra | 1M+ |
-| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white) | Claude Sonnet 5 | 1M+ |
-| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3.5 Flash | 1M+ |
-| **Basic** |![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white)  | GPT-5.6 Luna | 1M+ |
-| | ![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white)  | Claude Haiku 4.5 | 200k|
-| | ![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white) | Gemini 3.5 Flash-Lite | 1M+|
+| **Premium** | [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white)](https://openai.com/) | GPT-5.6 Sol | 1M+ |
+| | [![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white)](https://www.anthropic.com/) | Claude Opus 5 | 1M+ |
+| | [![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white)](https://gemini.google/in/about/?hl=en-IN) | Gemini 3.1 Pro | 1M+ |
+| **Pro** | [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white)](https://openai.com/) | GPT-5.6 Terra | 1M+ |
+| | [![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white)](https://www.anthropic.com/) | Claude Sonnet 5 | 1M+ |
+| | [![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white)](https://gemini.google/in/about/?hl=en-IN) | Gemini 3.5 Flash | 1M+ |
+| **Basic** | [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white)](https://openai.com/) | GPT-5.6 Luna | 1M+ |
+| | [![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white)](https://www.anthropic.com/) | Claude Haiku 4.5 | 200k |
+| | [![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white)](https://gemini.google/in/about/?hl=en-IN) | Gemini 3.5 Flash-Lite | 1M+ |
 
 Every tier gets the same 100,000 token daily budget — the plan buys capability, not volume.
 The catalog lives in the database, so adding a model, moving one between tiers or pulling
@@ -93,16 +96,21 @@ flowchart TB
     GW -.-> PG
     METER -.-> PG
 ```
+
 Authentication and entitlement run as a FastAPI dependency before the handler is reached, and the quota check runs before any provider call, so no upstream request is ever made for a caller who isn't allowed one. Every request that reaches a provider writes a usage record, including ones that fail mid-stream, so partially generated tokens are still billed.
 
 ## Design
 
-Five constraints shape the implementation. Each rules out the obvious naive approach.
+Six constraints shape the implementation. Each rules out the obvious naive approach.
 
 **Raw keys are never stored.** Only a SHA-256 digest and a short display prefix are
 persisted. Authentication hashes the presented key and looks up the digest, so the lookup
 stays a single indexed query while a database dump stays unusable. A lost key is replaced,
 never recovered.
+
+**Keys are revoked, never deleted.** Revoking a key sets `revoked_on` instead of removing
+the row. Authentication rejects any key with a revocation date, while its conversations
+and usage records — which would otherwise cascade away — stay intact for billing and audit.
 
 **Entitlement is derived, never cached on the user.** A user has no tier column. The active
 subscription — a dated row, not a flag — is the only answer to what they may reach, so
@@ -129,7 +137,7 @@ the work. The response is only ever built from tokens the stream actually return
 
 ## Running it
 
-**Requirements:** Python 3.12+, Docker
+**Requirements:** Python 3.14, Docker
 
 ```bash
 git clone https://github.com/goutham-226/SentryKey.git
@@ -142,7 +150,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 alembic upgrade head          # schema, plus the subscription tiers
-python -m scripts.seed_models # the model catalog
+python -m scripts.model_seed  # the model catalog (safe to re-run)
 
 uvicorn app.main:app --reload
 ```
@@ -155,27 +163,43 @@ curl http://127.0.0.1:8000/health
 # {"status":"ok"}
 ```
 
+### Running the tests
 
+The suite runs against a separate `sk_test` database in the same Postgres container, so
+development data is never touched. Migrations and the model catalog are applied once per
+run; every test starts from empty user, key and usage tables.
+
+```bash
+pip install -r requirements-dev.txt
+docker exec -it kq-postgres createdb -U kq sk_test   # first time only
+
+pytest -v
+```
+
+The same suite runs in CI on every push and pull request to `main`, against a fresh
+Postgres service.
 
 ## API
 
 | | Method | Path | Description |
 | :---: | :--- | :--- | :--- |
-|🔓 |`GET` | `/health` | Liveness probe. Unversioned — infrastructure, not API surface. |
-|🔓| `POST` | `/v1/auth/register` | Create an account. `409` on a duplicate email. |
-|🔓| `GET` | `/v1/models-catalog` | The public catalog: every active model and the plan it needs. |
-| 🔑 | `POST` | `/v1/keys` | Issue an API key. The raw value is returned **once**. |
-| 🔑| `GET` | `/v1/keys` | List the caller's keys by prefix, with quota and revocation state. |
+| 🔓 | `GET` | `/health` | Liveness probe. Unversioned — infrastructure, not API surface. |
+| 🔓 | `POST` | `/v1/auth/register` | Create an account. `409` on a duplicate email. |
+| 🔓 | `GET` | `/v1/models-catalog` | The public catalog: every active model and the plan it needs. |
+| 🔑 | `POST` | `/v1/keys` | Issue an API key. The raw value is returned **once**, along with its `key_id`. |
+| 🔑 | `GET` | `/v1/keys` | List the caller's active keys by prefix, with `key_id` and quota. Revoked keys are hidden. `404` if the caller has no active keys. |
+| 🔑 | `DELETE` | `/v1/keys/{key_id}` | Revoke one of the caller's keys. The row is kept (`revoked_on` is set) so usage history survives, and the key is rejected with `401` from then on. `404` if the key doesn't exist or belongs to someone else. |
 | 🔑 | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if a subscription is already active. |
 | 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier, `429` once the daily budget is spent, `400` if the model's provider isn't wired up yet (Anthropic, Google). |
-| 🔐| `GET` | `/v1/chat-history/{conversation_id}` | Full message log for a conversation owned by the caller's key. `404` if the conversation doesn't exist or belongs to a different key. |
+| 🔐 | `GET` | `/v1/chat-history/{conversation_id}` | Full message log for a conversation owned by the caller's key. `404` if the conversation doesn't exist or belongs to a different key. |
 
-🔓 ![Public](https://img.shields.io/badge/auth-public-brightgreen) &nbsp;&middot;&nbsp; 🔑  ![Auth](https://img.shields.io/badge/auth-password-orange) &nbsp;&middot;&nbsp; 🔐 ![API Key](https://img.shields.io/badge/auth-bearer_token-blue)
-
+🔓 ![Public](https://img.shields.io/badge/auth-public-brightgreen) &nbsp;&middot;&nbsp; 🔑 ![Auth](https://img.shields.io/badge/auth-password-orange) &nbsp;&middot;&nbsp; 🔐 ![API Key](https://img.shields.io/badge/auth-bearer_token-blue)
 
 Two credentials, deliberately. Key management and billing require the account password,
 because an API key is a bearer credential that lives in config files and CI variables — a
-leaked key can spend quota, but it cannot mint more keys, change the plan or escalate.
+leaked key can spend quota, but it cannot mint more keys, change the plan or escalate. The
+same rule is what makes revocation work: the owner revokes a leaked or lost key with the
+password, without ever needing the key itself.
 
 ### Getting from zero to a completion
 
@@ -183,18 +207,20 @@ leaked key can spend quota, but it cannot mint more keys, change the plan or esc
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/keys \
-  -u 'asha@example.com:correct-horse-battery'
+  -H 'Content-Type: application/json' \
+  -d '{"email": "asha@example.com", "password": "correct-horse-battery"}'
 ```
 
 ```json
 {
   "api_key": "kq_z9_Nuql9B9YsDYmhBfWPvBLvlCeXzIU",
-  "daily_quota": 100000
+  "daily_quota": 100000,
+  "key_id": 1
 }
 ```
 
 That value is shown once and cannot be retrieved. Only its first eleven characters and a
-hash are stored.
+hash are stored. Keep the `key_id` — it is how the key is revoked later.
 
 **2. Subscribe to a plan.** The period starts now and runs for one month; the database
 computes both ends.
@@ -330,6 +356,20 @@ How the history is carried over:
 ]
 ```
 
+**6. Revoke a key.** Use the `key_id` from step 1, or look it up with `GET /v1/keys`.
+
+```bash
+curl -X DELETE http://127.0.0.1:8000/v1/keys/1 \
+  -u 'asha@example.com:correct-horse-battery'
+```
+
+```json
+{ "status": "success" }
+```
+
+From here on, any request made with that key is rejected with `401`, and it no longer
+appears in `GET /v1/keys`. Its conversations and usage records are kept.
+
 ## Data model
 
 ```
@@ -347,12 +387,15 @@ what a user bought and for how long, and is the sole source of truth for entitle
 
 Cascades differ per relationship, deliberately: keys and conversations cascade from their
 owner, usage records keep their row when a conversation is deleted, and a retired model
-never rewrites history.
+never rewrites history. API keys are revoked with a timestamp rather than deleted, so the
+cascade from a key never fires in normal use.
 
 ## Project layout
 
 ```
 .
+├── .github/workflows/
+│   └── python-app.yml           CI — flake8 + pytest against a Postgres service on every push/PR to main
 ├── app/
 │   ├── main.py                  Routes
 │   ├── config.py                Settings from the environment
@@ -365,17 +408,18 @@ never rewrites history.
 │       └── provider.py          Per-provider inference calls, context budgeting, billing-safe streaming
 ├── tests/
 │   ├── __init__.py              Marks tests as a package
-│   ├── conftest.py              Fixtures — test DB override, migrations, per-test cleanup, async client, user and API key fixtures
+│   ├── conftest.py              Fixtures — test DB override, migrations + model seeding, per-test cleanup, async client, user / key / subscription fixtures
 │   ├── test_health.py           Smoke test for GET /health
 │   ├── test_auth.py             POST /v1/auth/register
-│   ├── test_keys.py             POST /v1/keys and GET /v1/keys
-│   ├── test_subscriptions.py    Subscription endpoints
+│   ├── test_keys.py             POST, GET and DELETE /v1/keys — issuing, listing and revoking keys
+│   ├── test_subscriptions.py    POST /v1/subscriptions
 │   ├── test_security.py         Unit tests for password hashing
 │   └── test_schemas.py          Unit tests for Pydantic request/response validation
 ├── alembic/versions/            One reversible revision per schema change
-├── scripts/                     Catalog seeding
+├── scripts/                     Catalog seeding (idempotent — safe to re-run)
 ├── sql/                         The original hand-written schema and reporting queries
 ├── docs/                        Dev notes on provider SDKs and error-handling design
+├── .pre-commit-config.yaml      Local hooks — YAML check, large files, ruff, pytest on pre-push
 ├── docker-compose.yaml          PostgreSQL 17, named volume, health check
 ├── pytest.ini                   Pytest config — async mode, test paths
 ├── requirements.txt             Runtime dependencies
@@ -386,7 +430,7 @@ Input and output schemas are kept separate throughout. A client cannot set a ser
 field, because no such field exists on the input model; a secret cannot leak, because the
 response model does not declare it. Both hold by construction rather than by review.
 
-## Known Flaws
+## Known flaws
 
 ### Race condition on concurrent requests (read-modify-write)
 
