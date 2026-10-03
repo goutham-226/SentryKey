@@ -75,7 +75,7 @@ async def create_key(payload:KeyCreate,db: AsyncSession = Depends(get_db)):
 
 @app.get("/v1/models-catalog",response_model=list[PublicCatalog]) # default 200
 async def display_models(db: AsyncSession = Depends(get_db)):
-    stmt = select(Models)
+    stmt = select(Models).order_by(Models.id)
     result = await db.execute(stmt)
     model = result.scalars().all()
     public_catalog = []
