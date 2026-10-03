@@ -568,11 +568,6 @@ Before the call, the prompt's size is estimated with `len(prompt.split())`, whic
 
 **Fix:** count the prompt with `tiktoken` (already used for context budgeting) for OpenAI models, and with each provider's tokenizer or token-counting endpoint once Anthropic and Google are wired up.
 
-### Smaller gaps
-
-- **No index on the ledger.** Every quota check sums `usage_records` for one key over the last 24 hours, and there is no index on `(api_key_id, requested_at)` yet, so the check slows down as the table grows.
-- **`is_active` is not enforced.** Models have an `is_active` flag, but neither the catalog nor the chat endpoint checks it, so a deactivated model is still listed and still callable.
-- **The pre-call quota check estimates the prompt by word count.** Real token counts are only known after the call, so the estimate can be off in either direction.
 
 ## License
 
