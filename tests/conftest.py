@@ -5,6 +5,8 @@ import asyncio
 
 # set your test database url
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://kq:kq@localhost:5432/sk_test"
+#add a placeholder key for OPEN_AI_API_KEY
+os.environ["OPENAI_API_KEY"] = "sk-test-not-a-real-key"
 
 # import pytest objects
 import pytest
@@ -180,10 +182,27 @@ def subscribed_user(client):
         return credentials
     return _subscribed_user
 
+"""
+A fixture to return, a subscribed api_key,
+to use for calling /v1/chat/completions & /v1/chat-history/{conversation_id}.
 
-
-
-
+"""
+@pytest.fixture
+def subscribed_api_key(client,subscribed_user):
+    async def _subscribed_api_key(tier: str):
+        user = await subscribed_user(tier=tier)
+    
+        email = user['email']
+        password = user['password']
+    
+        # create an api_key
+        request = {'email':email,'password':password}
+        response = await client.post('v1/keys',json=request)
+    
+        assert response.status_code == 201
+    
+        return response.json()
+    return _subscribed_api_key
 
 
 

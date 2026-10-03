@@ -15,7 +15,7 @@ from app.deps import get_current_user, get_bearer_key, bearer_auth
 from decimal import Decimal
 from app.services.provider import get_response
 
-app = FastAPI(title="key & quota service",version="0.1.0")
+app = FastAPI(title="SentryKey",version="0.1.0")
 
 
 @app.get("/health")
@@ -184,7 +184,7 @@ async def get_chat_history(conversation_id: int, api_key: ApiKeys = Depends(bear
         )
     stmt = select(Messages).where(
         Messages.conversation_id == conversation.id,
-    )
+    ).order_by(Messages.id)
     result = await db.execute(stmt)
     message = result.scalars().all()
     if message is None:
