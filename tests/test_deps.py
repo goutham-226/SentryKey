@@ -19,6 +19,24 @@ async def test_get_current_user_raises_401_on_no_credentials(client):
     assert response.status_code == 401
 
 """
+Test if get_current_user raise
+401 on unknown user.
+
+call GET /v1/keys with an unregistered user.
+"""
+async def test_get_current_user_raises_401_on_unknown_user(client):
+    # create fake credentials
+    email = 'user@example.com'
+    password = 'password123'
+
+    # send a request
+    response = await client.get('/v1/keys',auth=(email,password))
+   
+    # assert 401
+    assert response.status_code == 401
+
+
+"""
 Test if get_bearer_key raises 401
 with a missing  Authorization header.
 
@@ -49,9 +67,6 @@ async def test_bearer_auth_raises_401_on_no_auth_header(client):
     response = await client.get(f'/v1/chat-history/{conversation_id}') # missing auth header.
    
     assert response.status_code == 401
-
-
-
 
 
 
