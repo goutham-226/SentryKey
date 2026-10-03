@@ -72,6 +72,49 @@ async def test_get_bearer_key_raises_401_on_unknown_key(client):
 
     assert response.status_code == 401
     
+"""
+Test if get_bearer_key raises 401
+on a revoked key.
+
+create a key,
+revoke the key,
+call chat/completions
+
+assert 401.
+"""
+async def test_get_bearer_key_rasies_401_on_revoked_key(client,user):
+    email = user['email']
+    password = user['password']
+
+    # create key using POST /v1/keys
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+   
+    assert response.status_code == 201
+   
+    body = response.json()
+
+    raw_key = body['api_key']
+    key_id = body['key_id']
+
+    # revoke key using Delete /v1/keys/{key_id}
+
+    response = await client.delete(f'v1/keys/{key_id}',auth=(email,password))
+   
+    assert response.status_code == 200
+
+    # call chat-completions using revoked key
+    request = { 'prompt':'prompt',
+               'model':'gpt-5.6-terra',
+               'max_tokens':500,
+              }
+  
+    header = {'Authorization' : f'Bearer {raw_key}'}
+
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+
+    assert response.status_code == 401
+
 
 """
 Test if bearer_auth raises 401,
