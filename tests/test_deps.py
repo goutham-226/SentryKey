@@ -183,7 +183,36 @@ async def tets_get_bearer_key_raises_404_on_unknown_model(client, subscribed_use
     
     assert response.status_code == 404
 
+"""
+Test if get_bearer_auth raises 403
+on a model with a higher tier requirement.
+"""
+async def test_get_bearer_auth_raises_403_on_model_with_higher_tier(client,subscribed_user):
+    # subscribe to Basic Tier
+    # available models = gp[t-5.6-luna , claude-haiku-4.5 , gemini-3.5-flash-lite
+    credentials = await subscribed_user('Basic')
+   
+    email = credentials['email']
+    password = credentials['password']
 
+    # create a key
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+   
+    assert response.status_code == 201
+    
+    raw_key = response.json()['api_key']
+    key_id = response.json()['key_id']
+
+    # send a request with pro tier model - gpt-5.6-terra
+    request = {'prompt':'prompt',
+               'model':'gpt-5.6-terra',
+               'max_tokens':500,
+              }
+    header = {'Authorization' : f'Bearer {raw_key}'}
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+
+    assert response.status_code == 403
 
 """
 Test if bearer_auth raises 401,
