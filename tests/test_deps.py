@@ -148,6 +148,44 @@ async def test_get_bearer_key_raises_403_on_unsubscribed_user(client,user):
     assert response.status_code == 403 
 
 """
+Test if get_bearer_key returns
+404 on unknown model.
+
+use a subscribed user
+create a key
+send a request to v1/chat/completions.
+"""
+async def tets_get_bearer_key_raises_404_on_unknown_model(client, subscribed_user):
+    credentials = await subscribed_user('Basic')
+    
+    email = credentials['email']
+    password = credentials['password']
+
+    # create key for the user
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+   
+    await response.status_code == 201
+
+    body = response.json()
+    raw_key = body['api_key']
+    key_id = body['key_id']
+
+    # send a request with an unknown model
+    request = {'prompt':'prompt',
+               'model':'deepseek-v3',
+               'max_tokens':500,
+              }
+    
+    header = {'Authorization': f'Bearer {raw_key}'}
+    
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+    
+    assert response.status_code == 404
+
+
+
+"""
 Test if bearer_auth raises 401,
 on missing header use endpoint,
 GET /v1/chat-history/{conversation_id}.
