@@ -89,8 +89,23 @@ async def test_bearer_auth_raises_401_on_no_auth_header(client):
    
     assert response.status_code == 401
 
+"""
+Test if bearer_auth raises 401,
+on unknown key.
 
+send a request to /v1/chat-histoy/{conversation_id}
 
+auth check happens before querying conversation row.
+
+"""
+async def test_bearer_auth_raises_401_on_unknown_key(client):
+    conversation_id = 3
+    raw_key = 'kq_1223qwt52g1g3d23vc'
+    header = {'Authorization':f'Bearer {raw_key}'}
+
+    response = await client.get(f'/v1/chat-history/{conversation_id}',headers=header)
+
+    assert response.status_code == 401
 
 
 
