@@ -116,9 +116,107 @@ async def test_if_chat_history_raises_404_on_a_conversation_id_that_does_not_exi
    
     header = {'Authorization': f'Bearer {raw_key}'}
     # send a req to the endpoint
-    response = await client.get(f'v1/chat-history/{conversation_id}',headers=header)
+    response = await client.get(f'/v1/chat-history/{conversation_id}',headers=header)
 
     assert response.status_code == 404
+
+"""
+Test if GET /v1/chat-history/{conversation_id} raises 404,
+when key A requests key B's conversation.
+
+create two keys for the same user.
+
+add two messages to a conversation for key A.
+
+send a req to GET /v1/chat-history/{conversation_id} using Key B.
+
+"""
+async def test_if_chat_history_raises_404_on_a_different_key(client,subscribed_user):
+    # create Key A and Key B
+    user = await subscribed_user(tier='Basic')
+    
+    email = user['email']
+    password = user['password']
+
+    
+    request = {'email':email,'password':password}
+    
+    # create key A
+    response = await client.post('/v1/keys',json=request)
+   
+    assert response.status_code == 201  
+
+    key_A = response.json()['api_key']
+    key_A_id = response.json()['key_id']
+
+    # create key B
+    response = await client.post('v1/keys',json=request)
+
+    assert response.status_code == 201
+   
+    key_B = response.json()['api_key']
+    key_B_id = response.json()['key_id']
+
+    # create conversations for key A
+    async with SessionLocal() as db:
+        conversation = Conversations(api_key_id=key_A_id,title='New Conversation.')
+        db.add(conversation)
+        await db.flush()
+        
+        message = Messages(conversation_id = conversation.id,
+                           role = 'user',
+                           model = 'gpt-5.6-luna',
+                           content = 'Name a radioactive element ?',
+                           token_count = 5,
+                          )
+
+        db.add(message)
+        await db.flush()
+
+        message = Messages(conversation_id = conversation.id,
+                           role = 'user',
+                           model = 'gpt-5.6-luna',
+                           content = 'Uranium is a radioactive element that is found naturally on Earth.',
+                           token_count = 11,
+                          )
+        db.add(message)
+        await db.commit()
+
+    # request conversation-history with conversation.id and key B
+    header = {'Authorization': f'Bearer {key_B}'}
+   
+    response = await client.get(f'/v1/chat-history/{conversation.id}',headers=header)
+    
+    assert response.status_code == 404 
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
