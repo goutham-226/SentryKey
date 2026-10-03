@@ -9,7 +9,7 @@ from sqlalchemy import *
 from sqlalchemy.orm import *
 import hashlib
 
-basic = HTTPBasic()
+basic = HTTPBasic() # auto_error flag is set to true by default.
 bearer = HTTPBearer()
 
 
@@ -95,6 +95,7 @@ async def get_bearer_key(payload: ChatRequest,credentials: HTTPAuthorizationCred
 
 
 async def get_current_user(credential: HTTPBasicCredentials = Depends(basic),db: AsyncSession = Depends(get_db)) -> Users:
+    # default HTTPBAsic Raises 403 on no credentials.
     email = credential.username
     password = credential.password
     stmt = select(Users).where(Users.email == email)
