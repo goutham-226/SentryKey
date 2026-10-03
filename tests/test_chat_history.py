@@ -101,6 +101,30 @@ async def test_chat_history_returns_all_messages_with_the_right_format_and_order
      
 
 
+"""
+Test if GET /v1/chat-history/{conversation_id} raises 404,
+on a conversation_id that doesnt exist.
+"""
+async def test_if_chat_history_raises_404_on_a_conversation_id_that_does_not_exist(client,subscribed_api_key):
+    api_key = await subscribed_api_key(tier='Basic')
+   
+    raw_key = api_key['api_key']
+    key_id = api_key['key_id']
+
+    # a fake conversation_id
+    conversation_id = 3
+   
+    header = {'Authorization': f'Bearer {raw_key}'}
+    # send a req to the endpoint
+    response = await client.get(f'v1/chat-history/{conversation_id}',headers=header)
+
+    assert response.status_code == 404
+
+
+
+
+
+
 
 
 
