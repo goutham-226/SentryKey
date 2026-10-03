@@ -215,6 +215,37 @@ async def test_get_bearer_auth_raises_403_on_model_with_higher_tier(client,subsc
     assert response.status_code == 403
 
 """
+Test if model within the same tier
+,gets accepted raises 200.
+"""
+async def test_get_bearer_key_returns_success_on_model_within_subscribed_tier(client,subscribed_user):
+    user = await subscribed_user('Pro')
+    
+    email = user['email']
+    password = user['password']
+
+    # create key
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+    
+    assert response.status_code == 201
+   
+    raw_key = response.json()['api_key']
+    key_id = response.json()['key_id']  
+
+    # send a request to v1/chat/completions with a model within a tier
+    request = {'prompt':'this is a test prompt',
+               'model' : 'gpt-5.6-terra', # pro tier model
+               'max_tokens':150,
+              }
+    
+    header = {'Authorization': f'Bearer {raw_key}'}
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+   
+    assert response.status_code == 200
+
+ 
+"""
 Test if bearer_auth raises 401,
 on missing header use endpoint,
 GET /v1/chat-history/{conversation_id}.
