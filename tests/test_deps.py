@@ -35,7 +35,6 @@ async def test_get_current_user_raises_401_on_unknown_user(client):
     # assert 401
     assert response.status_code == 401
 
-
 """
 Test if get_bearer_key raises 401
 with a missing  Authorization header.
@@ -51,6 +50,28 @@ async def test_get_bearer_key_raises_401_on_no_auth_header(client):
     response = await client.post('/v1/chat/completions',json=request)
     
     assert response.status_code == 401
+
+"""
+Test if get_bearer_key_raises 401
+on an unknown key.
+
+use a fake key and send a request
+to /v1/chat/completions 
+"""
+async def test_get_bearer_key_raises_401_on_unknown_key(client):
+    raw_key = 'kq_123445567829012' # use a place holder key
+    header = {'Authorization': f'Bearer {raw_key}'}
+    
+    request = { 'prompt' :'prompt',
+                'model':'gpt-5.6-sol',
+                'max_tokens':500,
+              }
+
+
+    response = await client.post('/v1/chat/completions',json=request,headers=header)
+
+    assert response.status_code == 401
+    
 
 """
 Test if bearer_auth raises 401,
