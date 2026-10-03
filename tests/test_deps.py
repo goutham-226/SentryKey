@@ -115,6 +115,37 @@ async def test_get_bearer_key_rasies_401_on_revoked_key(client,user):
 
     assert response.status_code == 401
 
+"""
+Test if get_bearer_key raises 403
+on no subscription.
+
+get a user - without a sunscription
+create key
+and send request to v1/chat/completions.
+
+"""
+async def test_get_bearer_key_raises_403_on_unsubscribed_user(client,user):
+    # create key
+    email = user['email']
+    password = user['password']
+
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+
+    assert response.status_code == 201
+    body = response.json()
+    raw_key = body['api_key']
+    key_id = body['key_id']
+
+    # send a req to v1/chat/completions
+    request = {'prompt': 'prompt',
+              'model':'gpt-5.6-luna',
+              'max_tokens':500,
+              }
+    header = {'Authorization': f'Bearer {raw_key}'}
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+   
+    assert response.status_code == 403 
 
 """
 Test if bearer_auth raises 401,
