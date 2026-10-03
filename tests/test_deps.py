@@ -34,6 +34,41 @@ async def test_get_bearer_key_raises_401_on_no_auth_header(client):
     
     assert response.status_code == 401
 
+"""
+Test if bearer_auth raises 401,
+on missing header use endpoint,
+GET /v1/chat-history/{conversation_id}.
+
+Auth check happens before querying conversation rows in the
+database, so use a placeholder value to pass into {conversation_id}.
+
+"""
+async def test_bearer_auth_raises_401_on_no_auth_header(client):
+    conversation_id = 3
+   
+    response = await client.get(f'/v1/chat-history/{conversation_id}') # missing auth header.
+   
+    assert response.status_code == 401
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
