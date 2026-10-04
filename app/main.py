@@ -150,9 +150,9 @@ async def subscribtions(payload: SubscribeCatalog,user: Users = Depends(get_curr
     
 
 @app.post('/v1/chat/completions',response_model=ChatResponse) # default status - 200 OK
-async def chat_completions(payload: ChatRequest,api_key: ApiKeys = Depends(get_bearer_key)):
+async def chat_completions(payload: ChatRequest,api_key: ApiKeys = Depends(get_bearer_key),db: AsyncSession = Depends(get_db)):
     #privilege check is embedded into dependency func.
-    chat_response = await get_response(api_key,payload) #db reads and writes happen within the function
+    chat_response = await get_response(payload=payload,api_key=ap_key,db=db) #db reads and writes happen within the function
     return chat_response
 
 
