@@ -9,11 +9,14 @@ outputs.
 from dataclasses import dataclass
 
 
-# create class
+# create a data class with attributes compatible with our output response schema.
 @dataclass
 class provider_response:
     response: str
     prompt_tokens: int
     completion_tokens: int
+    context_tokens: int
     status_code: int
-    status: int
+    status: str
+    started_generation: bool
+    billable: bool
