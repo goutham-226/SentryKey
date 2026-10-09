@@ -9,8 +9,6 @@ TO-DO:
 -> make get_open_ai_prompt_tokens() async. ----> completed.
 -> route a real request to open_ai and make sure your tests are passed. ------>
 
-
-
 '''
 
 #import fastapi HTTPException
@@ -81,17 +79,42 @@ async def raise_404_on_conversation_id_with_wrong_api_key(api_key: ApiKeys, conv
                    detail = 'Conversation does not exist.',
                   ) 
 
-async def get_conversation_messages(conversation_id: int, db: AsyncSesssion) -> list[Messages]:
+async def get_message_history(conversation_id: int, db: AsyncSesssion) -> list[Messages]:
     """
     return a list of all messages,
     from new to old - to be able to trim the most recent tokens that fit our context_budget.
     """
-    stmt = select(Messages).where(Messages.conversation_id == conversation_id)
+    stmt = select(Messages).where(Messages.conversation_id == conversation_id).order_by(Messages.created_on)
     result = db.execute(stmt)
     messages = result.scalar.all()
     if messages is None:
         return []
     return messages
+
+async def trim_message_history(histroy: list[Messages], api_key: ApiKeys, db: AsyncSession) -> list[Messages]:
+    """
+    Check daily context quota limit for api_key.
+    Get Usage Records - context tokens used for the given day.
+    reconstruct message history to fit token budget.
+    return empty list if context cannot fit our quota budget.
+    """
+    stmt = select(ApiKeys.daily_context_quota).where(ApiKeys.id == api_key.id)
+    result = await db.execute(stmt)
+    daily_context_quota = result.scalar_one_or_none()
+   
+    # get context tokens used for today
+    stmt = select(func.coalesce(func.sum(UsageRecords.context_tokens))).where(
+                                                            UsageRecords.api_key_id == api_key.id,
+                                                            UsageRecords.requested_at + text("INTERVAL '1 day'") > func.now(),
+                                                           )
+    result = await db.execute(stmt)
+    context_tokens_used = result.scalar_one_or_none()
+  
+    # calculate number of tokens for message history
+    
+
+
+
 
 
 async def update_usage_history(payload: ChatRequest, api_key: ApiKeys, model_resposne: provider_response,db: AsyncSession):
@@ -251,13 +274,14 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
     
     payload.conversation_id = conversation.id
    
-    # create a list of messages
-    # all three providers have different schemas for conversation history
-    messages = []
-    # get all previous messages fro a given conversation_id
-    messages = await get_conversation_messages(conversation_id=payload.conversation_id, db=db)   
+    # get message histroy and handle context token budgeting.
+    # short-term memory previous 4 conversation messages (4-user + 4-assistant messages) 
+    message_history: list[Messages]  = await get_message_history(conversation_id=payload.conversation_id,db=db)
+    
+    # trim messages so context tokens do'nt exceed daily limit.
+    message_history = await trim_message_history(history=message_history,api_key=api_key,db=db)
 
- 
+
     # send request to a provider.
     if _provider == 'openai':
         model_response = await get_openai_response(payload)        
