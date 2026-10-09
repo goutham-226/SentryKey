@@ -1,5 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, status, Depends, Header
+from fastapi_swagger_ui_theme import setup_swagger_ui_theme
 from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, KeyRevoke, PublicCatalog, UserSubscribe, SubscribeCatalog, ChatRequest, ChatResponse, ChatHistoryResponse
 from app.config import Settings, get_settings
 from sqlalchemy.exc import IntegrityError
@@ -15,7 +16,9 @@ from app.deps import get_current_user, get_bearer_key, bearer_auth
 from decimal import Decimal
 from app.services.provider_service import get_response
 
-app = FastAPI(title="SentryKey",version="0.1.0")
+app = FastAPI(title="SentryKey",version="0.1.0",docs_url=None)
+
+setup_swagger_ui_theme(app, docs_path="/docs")
 
 
 @app.get("/health")
