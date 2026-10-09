@@ -22,6 +22,7 @@ A single endpoint for nine top AI models across three providers. It tracks your 
 [API](#api) &nbsp;&middot;&nbsp;
 [Data model](#data-model) &nbsp;&middot;&nbsp;
 [Project layout](#project-layout) &nbsp;&middot;&nbsp;
+[Roadmap](#roadmap-long-term-memory) &nbsp;&middot;&nbsp;
 [Known flaws](#known-flaws)
 
 </div>
@@ -60,10 +61,13 @@ between tiers or pulling one during an incident is an `UPDATE` rather than a dep
 
 OpenAI models are wired up end-to-end today, streamed directly against the OpenAI SDK with
 per-chunk token accounting. Anthropic and Google are catalogued and gated by tier already,
-but return `400 provider not available at the moment` until their provider clients land.
+but return `404 Model not available at the moment.` until their provider clients land.
 
 Because history lives in the gateway rather than the client, a conversation is portable
-across models. Start on one model, continue on another, and the thread comes with you.
+across models. Start on one model, continue on another, and the thread comes with you. Each
+request carries a **short-term memory** of the conversation's last four exchanges (four user
+messages and four assistant replies). A **long-term memory** that uses vector search to pull
+relevant details from older turns is [planned](#roadmap-long-term-memory).
 
 ## Architecture
 
@@ -75,37 +79,44 @@ flowchart TB
         direction TB
         AUTH["Auth<br/>key hash → api_key → user"]
         ENT["Entitlement<br/>subscription tier ≥ model tier"]
-        QUOTA["Quota<br/>tokens used in last 24h"]
-        CTX["Context<br/>history up to 1000 tokens"]
+        OWN["Ownership<br/>conversation_id belongs to key"]
+        QUOTA["Reserve<br/>lock key row → SUM last 24h → insert reservation"]
+        CTX["Short-term memory<br/>last 8 messages within context quota"]
         PROV["Provider client"]
+        SETTLE["Settle<br/>reservation → real usage + messages"]
+        REL["Release<br/>reservation → 0 tokens"]
     end
 
     OAI["OpenAI"]
     ANT["Anthropic<br/>not wired yet"]
     GEM["Google<br/>not wired yet"]
-    METER["Save<br/>messages + usage record"]
     R[Client response]
     PG[("PostgreSQL")]
 
-    C -->|Bearer key| AUTH --> ENT --> QUOTA --> CTX --> PROV
+    C -->|Bearer key| AUTH --> ENT --> OWN --> QUOTA --> CTX --> PROV
     PROV -->|openai| OAI
     PROV -.->|anthropic| ANT
     PROV -.->|google| GEM
-    OAI --> METER -->|JSON| R
+    OAI --> SETTLE -->|JSON| R
+    PROV -.->|exception / cancellation| REL
 
     GW -.-> PG
-    METER -.-> PG
 ```
 
-Authentication and entitlement run as a FastAPI dependency before the handler is reached, and the quota check runs before any provider call, so no upstream request is ever made for a caller who isn't allowed one. Every request that reaches a provider writes a usage record, including ones that fail mid-stream, so partially generated tokens are still billed.
+Authentication and entitlement run as a FastAPI dependency before the handler is reached.
+Conversation ownership and the quota reservation run before any provider call, so no
+upstream request is ever made for a caller who isn't allowed one. Every request that
+reaches a provider settles its usage record, including ones that fail mid-stream, so
+partially generated tokens are still billed.
 
-The database session is closed before the provider call and a fresh one is opened afterwards
-to write the results. A slow or hanging upstream stream therefore never holds a pooled
-connection or an open transaction.
+A request uses one database session, but its transaction is committed before the provider
+call, which hands the connection back to the pool. A slow or hanging upstream stream
+therefore never holds a pooled connection, an open transaction or a row lock. The session
+checks a connection out again afterwards to settle the reservation.
 
 ## Design
 
-Seven constraints shape the implementation. Each rules out the obvious naive approach.
+Nine constraints shape the implementation. Each rules out the obvious naive approach.
 
 **Raw keys are never stored.** Only a SHA-256 digest and a short display prefix are
 persisted. Authentication hashes the presented key and looks up the digest, so the lookup
@@ -127,10 +138,40 @@ counts reported by the provider. Remaining quota is a `SUM` over the key's rows 
 last 24 hours — a rolling window, not a calendar day. Nothing increments a running total,
 so nothing can drift, and several replicas agree without coordinating.
 
+**Quota is reserved before the call, not checked and hoped for.** A plain check-then-write
+lets two concurrent requests read the same remaining budget, both pass, and together overrun
+it. Admission is therefore a short, serialised reservation:
+
+1. `SELECT ... FOR UPDATE` locks the key's `api_keys` row, so concurrent requests on the
+   same key queue here, on every replica, because the lock lives in Postgres.
+2. Under the lock, the ledger is summed and the prompt (counted with `tiktoken`) is checked
+   against the quota. `max_tokens` is clamped to what's left, and the request gets `429` if
+   nothing is.
+3. A `Reserved` usage row for `prompt + max_tokens` is inserted and committed, which also
+   releases the lock. The next request's `SUM` already includes that reservation.
+4. After the provider call, the same row is **settled**: overwritten with the real token
+   counts, so any unused budget comes back immediately.
+5. If anything raises before settlement, including `asyncio.CancelledError` from a client
+   disconnect, the reservation is **released** (set to 0 tokens, status `Failed`) and any
+   conversation the request created is deleted. The release runs inside a shielded
+   `anyio.CancelScope`, so the cancellation can't interrupt the cleanup itself.
+
+The lock is held only for a few statements, never across the provider stream, so a slow
+response on one request doesn't block the next request on that key.
+
 **Context is assembled per request, against the model being used now.** Context windows
 differ by an order of magnitude across the catalog, so a conversation is a message log
-with no model attached and the truncation budget is recomputed every turn. Switching models
+with no model attached and the history budget is recomputed every turn. Switching models
 mid-thread is a supported operation rather than a corruption.
+
+**Short-term memory is the last four exchanges.** Each request carries at most the
+conversation's 8 most recent messages (4 user + 4 assistant), walked newest to oldest and
+kept whole while they fit the key's remaining daily context quota. The first message that
+doesn't fit is dropped along with everything older, and a leading assistant message is
+removed so the context always opens with a user turn. History is billed to the separate
+context quota, not the main token quota. Older turns are kept in the database but not sent
+to the model; bringing the relevant ones back is the job of the planned
+[long-term memory](#roadmap-long-term-memory).
 
 **Schema changes go through migrations.** Every table is defined by a reversible Alembic
 revision, and the subscription tiers themselves are seeded by one. No table is altered by
@@ -142,7 +183,10 @@ Errors raised before the first chunk arrives are free; a stream interrupted mid-
 still charges for what was produced, plus a fixed 15-token buffer, because the provider
 already did the work. When the stream finishes cleanly, the provider's own usage figures
 are recorded; if they never arrive, the gateway falls back to counting the streamed chunks
-with `tiktoken`.
+with `tiktoken`. Every provider returns the same `provider_response` dataclass, so settling
+the ledger doesn't depend on which provider served the request. Messages are only saved
+once generation has started, so a failed call never adds an empty turn to the
+short-term memory.
 
 ## Running it
 
@@ -216,7 +260,7 @@ Every commit then runs YAML validation, a large-file check, private-key detectio
 | 🔑 | `GET` | `/v1/keys` | List the caller's active keys by prefix, with `key_id` and quota. Revoked keys are hidden. `404` if the caller has no active keys. |
 | 🔑 | `DELETE` | `/v1/keys/{key_id}` | Revoke one of the caller's keys. The row is kept (`revoked_on` is set) so usage history survives, and the key is rejected with `401` from then on. `404` if the key doesn't exist or belongs to someone else. |
 | 🔑 | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if a subscription is already active. |
-| 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier, `404` for an unknown model, `429` once the daily budget is spent, `400` if the model's provider isn't wired up yet (Anthropic, Google). |
+| 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier. `404` for an unknown model, a model whose provider isn't wired up yet (Anthropic, Google), or a `conversation_id` that doesn't exist or belongs to a different key. `422` if `max_tokens` isn't positive. `429` once the daily budget is spent. |
 | 🔐 | `GET` | `/v1/chat-history/{conversation_id}` | Full message log for a conversation owned by the caller's key. `404` if the conversation doesn't exist or belongs to a different key. |
 
 🔓 ![Public](https://img.shields.io/badge/auth-public-brightgreen) &nbsp;&middot;&nbsp; 🔑 ![Auth](https://img.shields.io/badge/auth-password-orange) &nbsp;&middot;&nbsp; 🔐 ![API Key](https://img.shields.io/badge/auth-bearer_token-blue)
@@ -287,23 +331,22 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
   "completion_tokens": 498,
   "quota_remaining": 99486,
   "conversation_id": 1,
-  "error_detail": "completed"
+  "error_detail": null
 }
 ```
 
-`max_tokens` is clamped to the remaining daily budget before the request reaches the
-provider, so a single call cannot overrun the quota by more than its own prompt.
+`max_tokens` is clamped to the remaining daily budget, under the reservation lock, before
+the request reaches the provider. The prompt is counted with `tiktoken` at that point, so
+neither a single call nor several concurrent ones can overrun the quota.
 
-`error_detail` reports how the stream ended:
+The HTTP status is `200` whenever the provider was reached. How the stream ended is
+recorded in the usage record's `status` and `status_code`:
 
-| Value | Meaning | Billed |
+| Status | Meaning | Billed |
 | :--- | :--- | :--- |
-| `completed` | The stream finished normally. | Real usage reported by the provider |
+| `Completed` | The stream finished normally. | Real usage reported by the provider |
 | `Interrupted` | The stream broke after tokens had started arriving. `output` holds what was generated. | Tokens received + 15-token buffer |
-| `incomplete` | The provider failed before the first token. `output` is a "model not available" message. | Nothing |
-
-The HTTP status is `200` in all three cases. The upstream outcome is recorded in the usage
-record's `status` and `status_code`.
+| `Failed` | The provider failed before the first token, or the request raised before settling. `output` is a "model not available" message, and no messages are saved. | Nothing, the reservation is released |
 
 **4. Pull the conversation back.**
 
@@ -371,25 +414,33 @@ On a Pro subscription, the same request goes through and the reply is added to c
 {
   "model": "gpt-5.6-terra",
   "output": "The AGC software was written in an assembly language...",
-  "prompt_tokens": 531,
+  "prompt_tokens": 9,
   "completion_tokens": 402,
-  "quota_remaining": 98553,
+  "quota_remaining": 99075,
   "conversation_id": 1,
-  "error_detail": "completed"
+  "error_detail": null
 }
 ```
 
-How the history is carried over:
+How the history is carried over (short-term memory):
 
-- The gateway loads the conversation's messages newest first. It keeps as many as fit in the
-  context budget: 1,000 tokens per request, or less if the key's remaining daily context quota
-  (100,000 tokens per rolling 24 hours) is lower. The message that crosses the limit is trimmed
-  rather than dropped. The kept messages are then sent oldest to newest, followed by the new prompt.
+- Before anything is reserved, the gateway checks that `conversation_id` belongs to the
+  caller's key and returns `404` if it doesn't. Omitting it (or sending `0`) starts a new
+  conversation.
+- It takes the conversation's **last 8 messages** (4 user + 4 assistant) and walks them newest
+  to oldest, keeping whole messages while they fit the key's remaining daily context quota
+  (100,000 tokens per rolling 24 hours). The first message that doesn't fit is dropped with
+  everything older than it, and a leading assistant message is removed so the history starts
+  on a user turn. The kept messages are sent oldest to newest, followed by the new prompt.
+- Anything older than those 8 messages is still stored and returned by `/v1/chat-history`,
+  but the model doesn't see it. Recalling relevant older details is what the planned
+  [long-term memory](#roadmap-long-term-memory) is for.
 - Messages are sent as plain `role` + `content`, and the model that produced each one isn't
   passed along. The new model sees the earlier assistant turns as if it had written them itself.
-- The history counts toward `prompt_tokens`, which is why that figure jumps from 16 to 531.
-  So continuing a conversation costs more of the daily token quota than starting a new one.
-  The history tokens also count against the key's separate daily context quota.
+- History is billed to the context quota, not the token quota. The provider's reported prompt
+  count includes the history, so the gateway subtracts the history tokens before recording
+  `prompt_tokens`. That's why the figure above is only the new prompt, and why continuing a
+  conversation costs the same daily token quota as starting one.
 - Every message stores the model that produced it, so `/v1/chat-history/1` shows where the
   switch happened:
 
@@ -454,7 +505,10 @@ cascade from a key never fires in normal use.
 │   ├── models.py                SQLAlchemy ORM — the database schema
 │   ├── schemas.py               Pydantic — the API contract
 │   └── services/
-│       └── provider.py          Quota check, context budgeting, billing-safe streaming, ledger writes
+│       ├── provider_service.py  get_response orchestration — ownership check, quota reservation (row lock),
+│       │                        short-term memory, provider routing, settle / release of the reservation
+│       ├── open_ai.py           OpenAI streaming client, tiktoken counting, billable vs non-billable error handling
+│       └── provider_data.py     provider_response dataclass — the one result shape every provider returns
 ├── tests/
 │   ├── __init__.py              Marks tests as a package
 │   ├── conftest.py              Fixtures — test DB override, migrations + model seeding, per-test cleanup, async client, user / key / subscription fixtures
@@ -486,87 +540,87 @@ Input and output schemas are kept separate throughout. A client cannot set a ser
 field, because no such field exists on the input model; a secret cannot leak, because the
 response model does not declare it. Both hold by construction rather than by review.
 
+## Roadmap: long-term memory
+
+Short-term memory only covers the last four exchanges. Anything said earlier, like a name,
+a constraint set at the start of a long thread, or a decision from yesterday's conversation,
+drops out of what the model sees even though it is still in the database. Long-term memory
+is meant to bring back the relevant parts of that older history, chosen by what the new
+prompt is about. It is **not implemented yet**. The plan:
+
+1. **Embed on write.** When a turn is settled, its messages are embedded and the vectors are
+   stored alongside them. Postgres stays the only datastore, with an extension such as
+   `pgvector`, so a memory is a row with the same ownership and cascade rules as the
+   message it came from.
+2. **Search on read.** Before the provider call, the incoming prompt is embedded and a
+   nearest-neighbour search runs over the key's older messages: earlier turns of this
+   conversation that fall outside the 8-message window, and the key's previous
+   conversations. Only results above a similarity threshold are kept.
+3. **Merge into context.** The retrieved snippets go ahead of the short-term history, marked
+   as recalled context. Short-term memory keeps priority: recalled snippets only use the
+   context budget it leaves behind.
+4. **Bill it like history.** Recalled tokens count against the daily context quota, and the
+   embedding calls are recorded in the ledger, so long-term memory never bypasses the same
+   metering every other token goes through.
+
+Every search is filtered by `api_key_id`, matching how `/v1/chat-history` and conversation
+continuation are scoped, so one key can never recall another key's messages.
+
 ## Known flaws
 
-### Race condition on concurrent requests (check-then-act)
+Fixed in the provider-service refactor: the check-then-act race on concurrent requests (now
+a locked reservation), messages being written into another key's conversation (now a `404`
+before anything is reserved), and the pre-call prompt estimate using a word count (now
+`tiktoken`).
 
-When two requests from the same API key arrive at nearly the same time, both read the current usage from the database before either one writes its new usage record. Each request sees the same total, passes the same quota check, and calls the provider.
+### The context quota isn't reserved
 
-**Example:**
+The token quota is checked and reserved under the `api_keys` row lock, but the context
+quota is read afterwards, once the lock has been released. Two concurrent requests that
+continue conversations can both see the same remaining context budget and together go over it.
 
-1. Request A sums usage and sees 99,900 of 100,000 tokens used
-2. Request B sums usage and sees the same 99,900, before A has written anything
-3. Both pass the quota check, and both get `max_tokens` clamped to the same remaining 100
-4. Both write a usage record
+**Fix:** compute the trimmed history inside the locked section and write its size into the
+reservation row's `context_tokens`, so the next request's `SUM` already sees it.
 
-Result: two requests were served against one request's worth of remaining quota, so the key ends up over its daily budget.
+### A crashed worker leaves its reservation behind
 
-**Why it happens:** the check and the write happen in two separate sessions, with the provider call in between, at PostgreSQL's default `READ COMMITTED` isolation level. Nothing stops another request from reading the same ledger between them. The longer the provider call takes, the wider that gap gets.
+A reservation is released by the request's own exception handler. If the process dies
+outright between reserving and settling (`SIGKILL`, OOM, a host failure), that never runs,
+and the `Reserved` row keeps counting `prompt + max_tokens` against the key for 24 hours.
 
-**Impact:** a client that fires parallel requests can go over its quota. The risk increases with concurrency and with response length.
+**Fix:** a periodic job that releases `Reserved` rows older than the longest possible
+provider call.
 
-**Possible fixes (not yet implemented):**
+### Over-reservation near the limit
 
-| Fix | How it works | Why it falls short here |
-| :--- | :--- | :--- |
-| **Row lock** | `SELECT ... FOR UPDATE` on the key's `api_keys` row before checking quota | The lock only holds while the transaction is open. Keeping it open for the whole provider stream holds a pooled connection for tens of seconds, and makes every request on that key wait for the slowest one. |
-| **`SERIALIZABLE` isolation** | Postgres detects the conflicting reads and aborts one transaction | Same long transaction problem. The aborted request has to retry, and the provider call it already made can't be undone. |
-| **Reservation row in Postgres** | Insert a provisional usage row for `max_tokens` before the call, correct it afterwards | Two concurrent requests can still both run the `SUM` before either inserts. It narrows the race but doesn't close it without a lock. |
-| **Atomic reservation in Redis** | Check and reserve budget in one atomic Redis operation, settle after the call | The planned fix. See below. |
+The full clamped `max_tokens` is reserved up front. While a long request is in flight, a
+concurrent request on the same key sees that whole amount as spent, and can be clamped
+lower or refused with `429` even though the first request will probably use less. The
+budget comes back as soon as the first request settles.
 
-#### Why Redis is the preferred fix
+### Empty conversations on failed first turns
 
-The Postgres fixes clash with how a request runs here. The session is deliberately closed before the provider call, so a slow upstream never holds a connection or an open transaction. Any fix that relies on a lock or transaction staying open across the call undoes that.
-
-Redis removes the gap between "check" and "write" by making them a single step. Redis runs each command, or each Lua script, to completion before it starts the next one, so two requests can never both read the same remaining budget. The quota check becomes a **reservation**:
-
-1. **Reserve before the call.** A short Lua script runs atomically. It reads the key's counter and checks `used + prompt_estimate + max_tokens <= daily_quota`. If the budget fits, it adds that amount with `INCRBY` and lets the request through. If not, it rejects the request with `429`. The second of two concurrent requests sees the first one's reservation, so the overrun in the example above can't happen.
-2. **Call the provider with no database connection held.** Nothing is locked while the stream runs. The reservation is just a number in Redis.
-3. **Settle after the call.** Once the real token counts are known, `DECRBY` the difference between what was reserved and what was actually used, so an early stop or a pre-generation failure gives the unused budget back. Then write the usage record to Postgres as before.
-
-This fits the rest of the design:
-
-- **The ledger stays the source of truth.** Redis holds a fast-moving estimate used only for admission control. Billing, reporting and chat history still come from Postgres. If Redis loses its data, each key's counter can be rebuilt with the same `SUM` the gateway runs today.
-- **It works across replicas.** Every gateway instance talks to the same Redis, so the quota is enforced globally without the instances coordinating. An in-process `asyncio.Lock` would only protect a single process.
-- **It's fast.** One round trip of well under a millisecond replaces a `SUM` over a growing table on every request, which also takes the missing ledger index off the hot path.
-- **It covers the context quota too.** The daily context allowance has exactly the same check-then-act shape and can use a second counter in the same Lua script.
-
-**Trade-offs:**
-
-- **The time window changes.** A single counter with a 24-hour TTL is a fixed window, not the rolling window the ledger uses today. Matching the rolling behaviour exactly needs either a sorted set of timestamped entries or hourly bucket counters (`quota:{key_id}:{hour}`) summed over the last 24 buckets.
-- **Over-reservation.** Reserving the full `max_tokens` up front can briefly turn away a request that would have fit, until the settle step refunds the difference.
-- **Another service to run.** If Redis is unreachable, the gateway needs a policy. It can fail closed and reject requests, or fail open and fall back to the current Postgres check, accepting that the race is back while Redis is down.
-- **Drift.** If a process crashes between reserving and settling, the reservation is never refunded. A periodic job that resets each counter from the ledger fixes this.
-
-**Test gap:** the current suite runs requests one at a time, so this bug is never exercised. A regression test would stub the provider with a deliberate delay, fire N concurrent requests with `asyncio.gather` against a key whose remaining quota only covers some of them, and assert that the total recorded usage never exceeds the quota.
-
-### Conversation ownership is not checked when saving messages
-
-When a chat request includes a `conversation_id`, history is loaded only if that conversation belongs to the caller's key. The write step afterwards looks the conversation up by id alone. A key that sends another key's `conversation_id` gets no history, but its new messages and usage record are still attached to the other key's conversation, and that id is returned in the response. The owner then sees messages they never sent in `/v1/chat-history`.
-
-A `conversation_id` that doesn't exist at all silently starts a new conversation instead of returning an error.
-
-**Fix:** filter the write-side lookup by `api_key_id` as well, and return `404` for an unknown or foreign `conversation_id` before the provider is called, matching how `/v1/chat-history` already behaves.
-
-**Test gap:** a test would create a conversation with one key, send a completion with a second key and the same `conversation_id`, and assert a `404`, with the first key's history unchanged.
+A new conversation is committed before the provider call. If that call fails before
+generating anything, the request settles normally with nothing billed and no messages saved,
+but the empty conversation stays. Conversations are only deleted when the request raises.
 
 ### No index on the usage ledger
 
-Every chat request runs two `SUM`s over `usage_records`, one for tokens and one for context, filtered by `api_key_id` and the last 24 hours. No migration creates an index on `(api_key_id, requested_at)`, so each check scans more rows as the table grows, and quota checks get slower the longer the system runs.
+Every chat request runs two `SUM`s over `usage_records`, one for tokens and one for context,
+filtered by `api_key_id` and the last 24 hours. No migration creates an index on
+`(api_key_id, requested_at)`, so each check scans more rows as the table grows. The token
+`SUM` now runs while the key's row lock is held, so a slow `SUM` also lengthens how long
+concurrent requests on that key wait.
 
-**Fix:** add a composite index on `(api_key_id, requested_at)` in a new Alembic revision. The Redis reservation above would also take this query off the hot path.
+**Fix:** add a composite index on `(api_key_id, requested_at)` in a new Alembic revision.
+At higher scale, an atomic counter in Redis could take the `SUM` off the hot path entirely,
+with the ledger kept as the source of truth.
 
 ### `is_active` is not enforced
 
 Models have an `is_active` flag meant for pulling a model during an incident or after a provider deprecates it. Neither `/v1/models-catalog` nor `/v1/chat/completions` checks it, so a deactivated model is still listed and still callable.
 
 **Fix:** filter the catalog on `is_active`, and have the entitlement dependency reject inactive models, for example with `404` or `410 Gone`.
-
-### The pre-call quota check estimates the prompt by word count
-
-Before the call, the prompt's size is estimated with `len(prompt.split())`, which is a word count, not a token count. Token counts usually run higher than word counts, especially for code and non-English text, so a request near the limit can be let through and land slightly over budget. The real figures are only known after the provider responds.
-
-**Fix:** count the prompt with `tiktoken` (already used for context budgeting) for OpenAI models, and with each provider's tokenizer or token-counting endpoint once Anthropic and Google are wired up.
 
 
 ## License
