@@ -91,7 +91,7 @@ async def get_message_history(conversation_id: int, db: AsyncSesssion) -> list[M
         return []
     return messages
 
-async def trim_message_history(histroy: list[Messages], api_key: ApiKeys, db: AsyncSession) -> list[Messages]:
+async def trim_message_history(histrory: list[Messages], api_key: ApiKeys, db: AsyncSession) -> list[dict[str,str]]:
     """
     Check daily context quota limit for api_key.
     Get Usage Records - context tokens used for the given day.
@@ -100,7 +100,7 @@ async def trim_message_history(histroy: list[Messages], api_key: ApiKeys, db: As
     """
     stmt = select(ApiKeys.daily_context_quota).where(ApiKeys.id == api_key.id)
     result = await db.execute(stmt)
-    daily_context_quota = result.scalar_one_or_none()
+    daily_context_quota: int = result.scalar_one_or_none()
    
     # get context tokens used for today
     stmt = select(func.coalesce(func.sum(UsageRecords.context_tokens))).where(
@@ -108,13 +108,43 @@ async def trim_message_history(histroy: list[Messages], api_key: ApiKeys, db: As
                                                             UsageRecords.requested_at + text("INTERVAL '1 day'") > func.now(),
                                                            )
     result = await db.execute(stmt)
-    context_tokens_used = result.scalar_one_or_none()
+    context_tokens_used: int = result.scalar_one_or_none()
   
-    # calculate number of tokens for message history
+    # get last 4 conversations
+    _count: int = 0
+    _trimmed_messages: list[Messages] = []
+    history.reverse() # first messages in the  list  are the latest
+   
+    for messages in history:
+        if _count == 8:
+            break
+        _trimmed_messages.append(messages)
+        _count += 1
     
+    available_tokens = daily_context_quota + context_tokens_used 
+    if available_tokens == 0: 
+        return []
+    
+    trimmed_history: list[dict[str,str]] = []
+    my_dict: dict[str,str] = {}
 
+    total_tokens_requested: int = 0    
 
-
+    for message in _trimmed_messages:
+        token_count = message.token_count
+        total_tokens_requested += token_count
+        content = message.content
+        # if total_tokens are > than available trim the last message so it fits the budget.
+        if total_tokens_requested > available_tokens:
+            keep = token_count - (total_tokens_requested - available_tokens)
+            if keep == 0:
+                break
+            content = message.content[:keep]
+            
+        my_dict = {'role': message.role, 'content':content}
+        trimmed_history.append(my_role)            
+      
+    return trimmed_history
 
 
 async def update_usage_history(payload: ChatRequest, api_key: ApiKeys, model_resposne: provider_response,db: AsyncSession):
@@ -279,7 +309,7 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
     message_history: list[Messages]  = await get_message_history(conversation_id=payload.conversation_id,db=db)
     
     # trim messages so context tokens do'nt exceed daily limit.
-    message_history = await trim_message_history(history=message_history,api_key=api_key,db=db)
+    conversation_context: list[dict[str,str]] = await trim_message_history(history=message_history,api_key=api_key,db=db)
 
 
     # send request to a provider.
