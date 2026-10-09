@@ -17,6 +17,7 @@ dnspython==2.8.0
 docstring_parser==0.18.0
 email-validator==2.3.0
 fastapi==0.141.1
+fastapi-swagger-ui-theme==0.1.0
 google==3.0.0
 google-auth==2.58.0
 google-genai==2.24.0
