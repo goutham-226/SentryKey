@@ -20,3 +20,4 @@ class provider_response:
     status: str
     started_generation: bool
     billable: bool
+    token_buffer: int = 0 # billed in UsageRecords on top of completion_tokens, not shown to the caller.

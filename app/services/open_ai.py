@@ -27,7 +27,7 @@ encoding = tiktoken.get_encoding('o200k_base')
 UNAVAILABLE_MESSAGE = 'Sorry model is not available at the moment please try again later or use a different model'
 
 
-async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]) -> provider_response:
+async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]],history_tokens: int) -> provider_response:
     """
     send a request to OpenAI,
     and handle network Errors.
@@ -35,17 +35,18 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
     _request: dict[str,str] = {'role':'user','content':payload.prompt}
     _model: str = payload.model
     _max_tokens: int = payload.max_tokens
-    context.reverse() # we reversed the order while trimming context. -> older - newer
+    
     context.append(_request)
     # initialise variables to set dataclass attributes.
     model_response: str = ''
     prompt_tokens: int = await get_openai_tokens(payload.prompt)
     completion_tokens: int = 0
-    context_tokens: int = 0
+    context_tokens: int = history_tokens
     status_code: int = 0
     status: str = 'Incomplete'
     started_generation: bool = False
     billable: bool = False
+    token_buffer: int = 0
     # declared ahead of the try block so except clauses can read whatever was
     # streamed before the failure.
     token_counter: int = 0
@@ -59,10 +60,11 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
         for) some completion tokens before the failure.
         """
         nonlocal model_response, prompt_tokens, completion_tokens, context_tokens
-        nonlocal status_code, status, billable
+        nonlocal status_code, status, billable, token_buffer
         if started_generation:
             model_response = ''.join(parts)
-            completion_tokens = token_counter + 15 # safety buffer for an interrupted/uncounted completion.
+            completion_tokens = token_counter
+            token_buffer = 15 # safety buffer for an interrupted/uncounted completion.
             status_code = fallback_status_code
             status = 'Interrupted'
             billable = True
@@ -114,11 +116,12 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
 
         model_response = ''.join(parts)
         if usage is not None:
-            prompt_tokens = usage.prompt_tokens
+            # usage.prompt_tokens includes context, which is billed to the context quota.
+            # floor at the tiktoken prompt estimate in case context_tokens over-counts.
+            prompt_tokens = max(usage.prompt_tokens - context_tokens, prompt_tokens)
             completion_tokens = usage.completion_tokens
         else:
             completion_tokens = token_counter
-        completion_tokens += 15 # token_buffer added for all billable generations.
         status_code = 200
         status = 'Completed'
         billable = True
@@ -163,6 +166,7 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
                 status=status,
                 started_generation=started_generation,
                 billable=billable,
+                token_buffer=token_buffer,
               )
 
 

@@ -36,7 +36,7 @@ class SubscribeCatalog(BaseModel):
 class ChatRequest(BaseModel):
     prompt: str
     model: str
-    max_tokens: int
+    max_tokens: int = Field(gt=0)
     conversation_id: int | None
   
 

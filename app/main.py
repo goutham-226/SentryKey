@@ -13,7 +13,7 @@ import hashlib
 from app.security import hash_password,verify_password
 from app.deps import get_current_user, get_bearer_key, bearer_auth
 from decimal import Decimal
-from app.services.provider import get_response
+from app.services.provider_service import get_response
 
 app = FastAPI(title="key & quota service",version="0.1.0")
 
@@ -60,11 +60,11 @@ async def create_key(payload:KeyCreate,db: AsyncSession = Depends(get_db)):
     try:
         await db.commit()
     except IntegrityError:
+        await db.rollback()
         raise HTTPException(
             status_code=500,
             detail="Internal Server Error",
         )
-        await db.rollback()
     await db.refresh(apikey)
     key_out = KeyOut(
         daily_quota=apikey.daily_quota,
@@ -152,7 +152,7 @@ async def subscribtions(payload: SubscribeCatalog,user: Users = Depends(get_curr
 @app.post('/v1/chat/completions',response_model=ChatResponse) # default status - 200 OK
 async def chat_completions(payload: ChatRequest,api_key: ApiKeys = Depends(get_bearer_key),db: AsyncSession = Depends(get_db)):
     #privilege check is embedded into dependency func.
-    chat_response = await get_response(payload=payload,api_key=ap_key,db=db) #db reads and writes happen within the function
+    chat_response = await get_response(payload=payload,api_key=api_key,db=db) #db reads and writes happen within the function
     return chat_response
 
 
