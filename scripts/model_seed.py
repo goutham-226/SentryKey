@@ -1,10 +1,11 @@
+#scripts/model_seed.py
 from app.models import SubscriptionTiers,Models
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import *
 from app.db import SessionLocal
 import asyncio
 
-async def main():
+async def seed():
     async with SessionLocal() as db:
         stmt = select(SubscriptionTiers.id).where(SubscriptionTiers.name == 'Basic')
         result = await db.execute(stmt)
@@ -30,7 +31,6 @@ async def main():
             await db.commit()
         except IntegrityError:
             await db.rollback()
-        await db.refresh(model)
         # seeding premium model gemini-3.1-pro
         model = Models(model_id='google/gemini-3.1-pro',
                        provider='google',
@@ -46,7 +46,6 @@ async def main():
             await db.commit()
         except IntegrityError:
             await db.rollback()
-        await db.refresh(model)
         #seeding premium model claude-sonnet-5
         model = Models(model_id='claude-opus-5',
                        provider='anthropic',
@@ -62,7 +61,7 @@ async def main():
             await db.commit()
         except IntegrityError:
             await db.rollback()
-        await db.refresh(model)
+       
         #seeding pro model gemini-3-flash
         model = Models(model_id='gemini-3.5-flash',
                        provider='google',
@@ -78,7 +77,7 @@ async def main():
             await db.commit()
         except IntegrityError:
             await db.rollback()
-        await db.refresh(model)             
+         # await db.refresh(model)             
         # seeding pro model terra
         model = Models(model_id='gpt-5.6-terra',
                        provider='openai',
@@ -94,7 +93,7 @@ async def main():
             await db.commit()
         except IntegrityError:
             await db.rollback()
-        await db.refresh(model)
+        #await db.refresh(model)
         # seeding pro model claude-haiku-4.5
         model = Models(model_id='claude-sonnet-5',
                        provider='anthropic',
@@ -126,7 +125,7 @@ async def main():
             await db.commit()
         except IntegrityError:
             await db.rollback()
-        await db.refresh(model)
+        #await db.refresh(model)
         # seeding basic model
         model = Models(model_id='gemini-3.5-flash-lite',
                          provider='google',
@@ -142,7 +141,7 @@ async def main():
             await db.commit()
         except IntegrityError:
             await db.rollback()
-        await db.refresh(model)
+        #await db.refresh(model)
         #seeding basic model 
         model = Models(model_id='claude-haiku-4.5',
                        provider='anthropic',
@@ -158,11 +157,11 @@ async def main():
             await db.commit()
         except IntegrityError:
             await db.rollback()
-        await db.refresh(model)
+        #await db.refresh(model)
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    asyncio.run(seed())
 
 
 

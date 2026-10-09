@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, status, Depends, Header
-from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, PublicCatalog, UserSubscribe, SubscribeCatalog, ChatRequest, ChatResponse, ChatHistoryResponse
+from app.schemas import UserCreate, UserOut, KeyOut, KeyCreate, KeyRevoke, PublicCatalog, UserSubscribe, SubscribeCatalog, ChatRequest, ChatResponse, ChatHistoryResponse
 from app.config import Settings, get_settings
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +15,7 @@ from app.deps import get_current_user, get_bearer_key, bearer_auth
 from decimal import Decimal
 from app.services.provider_service import get_response
 
-app = FastAPI(title="key & quota service",version="0.1.0")
+app = FastAPI(title="SentryKey",version="0.1.0")
 
 
 @app.get("/health")
@@ -69,12 +69,13 @@ async def create_key(payload:KeyCreate,db: AsyncSession = Depends(get_db)):
     key_out = KeyOut(
         daily_quota=apikey.daily_quota,
         api_key=raw_key,
+        key_id=apikey.id,
     )
     return key_out
 
 @app.get("/v1/models-catalog",response_model=list[PublicCatalog]) # default 200
 async def display_models(db: AsyncSession = Depends(get_db)):
-    stmt = select(Models)
+    stmt = select(Models).order_by(Models.id)
     result = await db.execute(stmt)
     model = result.scalars().all()
     public_catalog = []
@@ -95,18 +96,28 @@ async def get_keys(user: Users = Depends(get_current_user), db: AsyncSession = D
     stmt = select(ApiKeys).where(ApiKeys.user_id == user.id)
     result = await db.execute(stmt)
     apikey = result.scalars().all()
-    if apikey is None:
+    if apikey == []:
         raise HTTPException(
             status_code=404,
             detail="No API keys Found",
         )
     key_out = []
+    found = False
     for key in apikey:
-        out = KeyOut(
-            daily_quota= key.daily_quota,
-            api_key= key.key_prefix,
+        if key.revoked_on is None:
+            out = KeyOut(
+            	    daily_quota= key.daily_quota,
+            	    api_key= key.key_prefix,
+            	    key_id = key.id, 
+		 )
+            key_out.append(out)
+            found = True
+    if not found:
+        raise HTTPException(
+            status_code=404,
+            detail='No active keys found',
         )
-        key_out.append(out)
+
     return key_out
 
 @app.post('/v1/subscriptions',response_model=UserSubscribe,status_code=status.HTTP_201_CREATED)
@@ -173,7 +184,7 @@ async def get_chat_history(conversation_id: int, api_key: ApiKeys = Depends(bear
         )
     stmt = select(Messages).where(
         Messages.conversation_id == conversation.id,
-    )
+    ).order_by(Messages.id)
     result = await db.execute(stmt)
     message = result.scalars().all()
     if message is None:
@@ -189,6 +200,41 @@ async def get_chat_history(conversation_id: int, api_key: ApiKeys = Depends(bear
         timestamp=m.created_on,
     ) for m in message]
     return history
+
+"""
+A DELETE endpoint for revoking keys.
+
+update api_key where apikey.id == key_id, apikey.user_id == user.id value revoked_on = func.now()
+if none:
+    raise(404 not found)
+
+"""
+@app.delete('/v1/keys/{key_id}',response_model=KeyRevoke) # default 200
+async def revoke_key(key_id: int,user: Users = Depends(get_current_user),db: AsyncSession = Depends(get_db)):
+    stmt = update(ApiKeys).where(
+               ApiKeys.id == key_id,
+               ApiKeys.user_id == user.id,
+             ).values(revoked_on = func.now())
+    result = await db.execute(stmt)
+    if result.rowcount == 0:
+        raise HTTPException(
+            status_code=404,
+            detail='key not found',
+        )
+    await db.commit()
+    return KeyRevoke(status='success')
+
+                 
+                
+
+ 
+
+
+
+
+
+
+
 
 
 

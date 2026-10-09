@@ -1,0 +1,377 @@
+# tests/test_deps.py
+
+# Test authorization dependencies.
+
+"""
+Test if get_curerent_user raises
+401 on missing credentials.
+
+send a req to GET /v1/keys without an auth head,
+and assert status_code 401.
+
+user check happens before querying an api_key from
+the database - so the function does not create an api_key using POST /v1/keys
+for this test.
+"""
+async def test_get_current_user_raises_401_on_no_credentials(client):
+    response = await client.get('/v1/keys') # no auth header
+    
+    assert response.status_code == 401
+
+"""
+Test if get_current_user raise
+401 on unknown user.
+
+call GET /v1/keys with an unregistered user.
+"""
+async def test_get_current_user_raises_401_on_unknown_user(client):
+    # create fake credentials
+    email = 'user@example.com'
+    password = 'password123'
+
+    # send a request
+    response = await client.get('/v1/keys',auth=(email,password))
+   
+    # assert 401
+    assert response.status_code == 401
+
+"""
+Test if get_bearer_key raises 401
+with a missing  Authorization header.
+
+send a request to /v1/chat/completions with missihg header,
+and assert if status code is 401.
+"""
+async def test_get_bearer_key_raises_401_on_no_auth_header(client):
+    request = {'prompt':'prompt ',
+               'model':'gpt-5.6-luna',
+               'max_tokens':500,
+              }
+    response = await client.post('/v1/chat/completions',json=request)
+    
+    assert response.status_code == 401
+
+"""
+Test if get_bearer_key_raises 401
+on an unknown key.
+
+use a fake key and send a request
+to /v1/chat/completions 
+"""
+async def test_get_bearer_key_raises_401_on_unknown_key(client):
+    raw_key = 'kq_123445567829012' # use a place holder key
+    header = {'Authorization': f'Bearer {raw_key}'}
+    
+    request = { 'prompt' :'prompt',
+                'model':'gpt-5.6-sol',
+                'max_tokens':500,
+              }
+
+
+    response = await client.post('/v1/chat/completions',json=request,headers=header)
+
+    assert response.status_code == 401
+    
+"""
+Test if get_bearer_key raises 401
+on a revoked key.
+
+create a key,
+revoke the key,
+call chat/completions
+
+assert 401.
+"""
+async def test_get_bearer_key_rasies_401_on_revoked_key(client,user):
+    email = user['email']
+    password = user['password']
+
+    # create key using POST /v1/keys
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+   
+    assert response.status_code == 201
+   
+    body = response.json()
+
+    raw_key = body['api_key']
+    key_id = body['key_id']
+
+    # revoke key using Delete /v1/keys/{key_id}
+
+    response = await client.delete(f'v1/keys/{key_id}',auth=(email,password))
+   
+    assert response.status_code == 200
+
+    # call chat-completions using revoked key
+    request = { 'prompt':'prompt',
+               'model':'gpt-5.6-terra',
+               'max_tokens':500,
+              }
+  
+    header = {'Authorization' : f'Bearer {raw_key}'}
+
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+
+    assert response.status_code == 401
+
+"""
+Test if get_bearer_key raises 403
+on no subscription.
+
+get a user - without a sunscription
+create key
+and send request to v1/chat/completions.
+
+"""
+async def test_get_bearer_key_raises_403_on_unsubscribed_user(client,user):
+    # create key
+    email = user['email']
+    password = user['password']
+
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+
+    assert response.status_code == 201
+    body = response.json()
+    raw_key = body['api_key']
+    key_id = body['key_id']
+
+    # send a req to v1/chat/completions
+    request = {'prompt': 'prompt',
+              'model':'gpt-5.6-luna',
+              'max_tokens':500,
+              }
+    header = {'Authorization': f'Bearer {raw_key}'}
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+   
+    assert response.status_code == 403 
+
+"""
+Test if get_bearer_key returns
+404 on unknown model.
+
+use a subscribed user
+create a key
+send a request to v1/chat/completions.
+"""
+async def tets_get_bearer_key_raises_404_on_unknown_model(client, subscribed_user):
+    credentials = await subscribed_user('Basic')
+    
+    email = credentials['email']
+    password = credentials['password']
+
+    # create key for the user
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+   
+    await response.status_code == 201
+
+    body = response.json()
+    raw_key = body['api_key']
+    key_id = body['key_id']
+
+    # send a request with an unknown model
+    request = {'prompt':'prompt',
+               'model':'deepseek-v3',
+               'max_tokens':500,
+              }
+    
+    header = {'Authorization': f'Bearer {raw_key}'}
+    
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+    
+    assert response.status_code == 404
+
+"""
+Test if get_bearer_auth raises 403
+on a model with a higher tier requirement.
+"""
+async def test_get_bearer_auth_raises_403_on_model_with_higher_tier(client,subscribed_user):
+    # subscribe to Basic Tier
+    # available models = gp[t-5.6-luna , claude-haiku-4.5 , gemini-3.5-flash-lite
+    credentials = await subscribed_user('Basic')
+   
+    email = credentials['email']
+    password = credentials['password']
+
+    # create a key
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+   
+    assert response.status_code == 201
+    
+    raw_key = response.json()['api_key']
+    key_id = response.json()['key_id']
+
+    # send a request with pro tier model - gpt-5.6-terra
+    request = {'prompt':'prompt',
+               'model':'gpt-5.6-terra',
+               'max_tokens':500,
+              }
+    header = {'Authorization' : f'Bearer {raw_key}'}
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+
+    assert response.status_code == 403
+
+"""
+Test if model within the same tier
+,gets accepted raises 200.
+"""
+async def test_get_bearer_key_returns_success_on_model_within_subscribed_tier(client,subscribed_user):
+    user = await subscribed_user('Pro')
+    
+    email = user['email']
+    password = user['password']
+
+    # create key
+    request = {'email':email,'password':password}
+    response = await client.post('v1/keys',json=request)
+    
+    assert response.status_code == 201
+   
+    raw_key = response.json()['api_key']
+    key_id = response.json()['key_id']  
+
+    # send a request to v1/chat/completions with a model within a tier
+    request = {'prompt':'this is a test prompt',
+               'model' : 'gpt-5.6-terra', # pro tier model
+               'max_tokens':150,
+              }
+    
+    header = {'Authorization': f'Bearer {raw_key}'}
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+   
+    assert response.status_code == 200
+
+ 
+"""
+Test if bearer_auth raises 401,
+on missing header use endpoint,
+GET /v1/chat-history/{conversation_id}.
+
+Auth check happens before querying conversation rows in the
+database, so use a placeholder value to pass into {conversation_id}.
+
+"""
+async def test_bearer_auth_raises_401_on_no_auth_header(client):
+    conversation_id = 3
+   
+    response = await client.get(f'/v1/chat-history/{conversation_id}') # missing auth header.
+   
+    assert response.status_code == 401
+
+"""
+Test if bearer_auth raises 401,
+on unknown key.
+
+send a request to /v1/chat-histoy/{conversation_id}
+
+auth check happens before querying conversation row.
+
+"""
+async def test_bearer_auth_raises_401_on_unknown_key(client):
+    conversation_id = 3
+    raw_key = 'kq_1223qwt52g1g3d23vc'
+    header = {'Authorization':f'Bearer {raw_key}'}
+
+    response = await client.get(f'/v1/chat-history/{conversation_id}',headers=header)
+
+    assert response.status_code == 401
+
+"""
+Test if bearer_auth raises 401 on,
+revoked key.
+"""
+async def test_bearer_auth_raises_401_on_revoked_key(client,user):
+    email = user['email']
+    password = user['password']
+   
+    # create key
+    request = {'email':email,'password':password}
+    
+    response = await client.post('v1/keys',json=request)
+   
+    assert response.status_code == 201
+
+    body = response.json()
+
+    raw_key = body['api_key']
+    key_id = body['key_id']
+
+    # revoke key
+    response = await client.delete(f'v1/keys/{key_id}',auth=(email,password))
+    
+    assert response.status_code == 200
+
+    # call chat/completions with revoked key
+    request = {'prompt':'prompt',
+               'model':'gpt-5.6-terra',
+               'max_tokens':500,
+              }
+    
+    header = {'Authorization':f'Bearer {raw_key}'}
+     
+    response = await client.post('v1/chat/completions',json=request,headers=header)
+
+    assert response.status_code == 401
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

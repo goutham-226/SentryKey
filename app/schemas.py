@@ -20,6 +20,10 @@ class KeyCreate(BaseModel):
 class KeyOut(BaseModel):
     daily_quota: int
     api_key: str
+    key_id: int
+
+class KeyRevoke(BaseModel):
+    status: str
 
 class PublicCatalog(BaseModel):
     model_name: str
@@ -37,7 +41,7 @@ class ChatRequest(BaseModel):
     prompt: str
     model: str
     max_tokens: int = Field(gt=0)
-    conversation_id: int | None
+    conversation_id: int | None = None
   
 
 class ChatResponse(BaseModel):

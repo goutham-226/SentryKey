@@ -1,0 +1,61 @@
+# Runs lint + the full pytest suite against a throwaway Postgres on every push/PR to main.
+name: Python application
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Fake keys: tests never call the real providers, but Settings() requires them.
+    # DATABASE_URL is set by tests/conftest.py (points at sk_test below).
+    env:
+      OPENAI_API_KEY: test-openai-key
+      REPLICATE_API_TOKEN: test-replicate-token
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: kq
+          POSTGRES_PASSWORD: kq
+          POSTGRES_DB: sk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kq -d sk_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.14
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.14"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+        pip install flake8
+
+    - name: Lint with flake8
+      run: |
+        # fail only on syntax errors / undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # everything else is a warning only
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Test with pytest
+      run: |
+        pytest -v
