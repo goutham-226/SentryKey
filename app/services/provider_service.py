@@ -314,7 +314,7 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
 
     # send request to a provider.
     if _provider == 'openai':
-        model_response = await get_openai_response(payload)        
+        model_response = await get_openai_response(payload=payload,context=context)        
 
     elif _provider == 'anthropic':
         # wire provider later
