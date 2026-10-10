@@ -3,12 +3,6 @@
 A module with a method to get a chat request,
 from POST /v1/chat/completions and return a
 processed response.
-
-TO-DO:
------
--> make get_open_ai_prompt_tokens() async. ----> completed.
--> route a real request to open_ai and make sure your tests are passed. ------>
-
 '''
 
 #import anyio -> shield reservation release from cancellation
