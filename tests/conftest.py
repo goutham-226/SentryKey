@@ -8,6 +8,7 @@ os.environ["DATABASE_URL"] = "postgresql+asyncpg://kq:kq@localhost:5432/sk_test"
 #add a placeholder key for OPEN_AI_API_KEY
 os.environ["OPENAI_API_KEY"] = "sk-test-not-a-real-key"
 
+
 # import pytest objects
 import pytest
 from httpx import AsyncClient, ASGITransport

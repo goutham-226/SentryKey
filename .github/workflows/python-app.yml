@@ -19,6 +19,8 @@ jobs:
     env:
       OPENAI_API_KEY: test-openai-key
       REPLICATE_API_TOKEN: test-replicate-token
+      ANTHROPIC_API_KEY: test-anthropic-key
+      ANTHROPIC_SYSTEM_PROMPT: test-system-prompt
 
     services:
       postgres:
