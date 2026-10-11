@@ -80,7 +80,7 @@ async def get_model_provider(model: str,db: AsyncSession) -> str | None:
 async def create_conversation_id(payload: ChatRequest, api_key: ApiKeys,db: AsyncSession) -> Conversations:
     """
     Create a new conversation and return.
-    flush (not commit) -> get_response commits it before the provider call,
+    flush (not commit) -> get_tokens commits this,
     and release_reservation deletes it if the request fails.
     """
     conversation = Conversations(
@@ -305,10 +305,7 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
     # trim messages so context tokens do'nt exceed daily limit.
     conversation_context, context_tokens = await trim_message_history(history=message_history,api_key=api_key,db=db)
     
-    # end the transaction before the provider call -> returns the connection to the pool
-    # instead of holding it idle while the model responds. also commits a new conversation.
-    # update_usage_history checks out a connection again to settle the reservation.
-    await db.commit()
+
     
 
     total_tokens_used, _max_tokens, reservations = await get_total_tokens(api_key=api_key,prompt_tokens=prompt_tokens,payload=payload,context_tokens=context_tokens,db=db)
