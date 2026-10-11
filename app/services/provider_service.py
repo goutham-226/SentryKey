@@ -7,6 +7,7 @@ processed response.
 
 #import anyio -> shield reservation release from cancellation
 import anyio
+import logging
 from collections.abc import Sequence
 #import fastapi HTTPException
 from fastapi import HTTPException
@@ -23,6 +24,8 @@ from app.services.provider_data import provider_response
 from app.services.open_ai import get_openai_tokens, get_openai_response
 from app.services.anthropic_ai import get_anthropic_tokens, get_anthropic_response
 
+
+logger = logging.getLogger(__name__)
 
 async def get_total_tokens(api_key: ApiKeys,prompt_tokens: int,payload: ChatRequest,context_tokens: int,db: AsyncSession) -> tuple[int, int, UsageRecords]:
     """
@@ -226,20 +229,25 @@ async def release_reservation(reservation_id: int, db: AsyncSession, conversatio
     fails before update_usage_history settles it -> otherwise the
     reserved prompt + max_tokens count against the daily quota for 24 hours.
     conversation_id -> a conversation created by this request, deleted so failed requests leave no empty conversations.
+    only touches a row still 'Reserved' -> a reservation already settled by update_usage_history
+    (e.g. cancelled right after its commit) is left alone, along with its conversation and messages.
     """
     # roll back first -> the session may be in a failed state after the exception.
     await db.rollback()
-    if conversation_id is not None:
-        # safe to delete -> messages and the usage row only reference it once update_usage_history commits.
-        await db.execute(delete(Conversations).where(Conversations.id == conversation_id))
-    stmt = update(UsageRecords).where(UsageRecords.id == reservation_id).values(
+    stmt = update(UsageRecords).where(UsageRecords.id == reservation_id, UsageRecords.status == 'Reserved').values(
                                      prompt_tokens = 0,
                                      completion_tokens = 0,
                                      context_tokens = 0,
                                      status = 'Failed',
                                      status_code = 500,
                                     )
-    await db.execute(stmt)
+    result = await db.execute(stmt)
+    if result.rowcount == 0:
+        await db.rollback() # the row was already settled by update_usage_history -> rollback to end the transaction.
+        return
+    if conversation_id is not None:
+        # the conversation was created by this request -> delete it.
+        await db.execute(delete(Conversations).where(Conversations.id == conversation_id))
     await db.commit()
 
 
@@ -336,7 +344,10 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
     except BaseException:
         # shield -> a cancelled task would otherwise cancel the release's own awaits too.
         with anyio.CancelScope(shield=True):
-            await release_reservation(reservation_id=reservation_id,db=db,conversation_id=created_conversation_id)
+            try:
+                await release_reservation(reservation_id=reservation_id,db=db,conversation_id=created_conversation_id)
+            except Exception:
+                logger.exception('Failed to release reservation %s', reservation_id)
         raise
 
     # tokens used before this request + what the settled row actually billed.
