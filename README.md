@@ -59,9 +59,9 @@ plus a separate 100,000-token daily allowance for conversation history. The plan
 capability, not volume. The catalog lives in the database, so adding a model, moving one
 between tiers or pulling one during an incident is an `UPDATE` rather than a deploy.
 
-OpenAI models are wired up end-to-end today, streamed directly against the OpenAI SDK with
-per-chunk token accounting. Anthropic and Google are catalogued and gated by tier already,
-but return `404 Model not available at the moment.` until their provider clients land.
+OpenAI and Anthropic models are wired up end-to-end today, each streamed directly against
+its own SDK with per-event token accounting. Google is catalogued and gated by tier already,
+but returns `404 Model not available at the moment.` until its provider client lands.
 
 Because history lives in the gateway rather than the client, a conversation is portable
 across models. Start on one model, continue on another, and the thread comes with you. Each
@@ -88,16 +88,18 @@ flowchart TB
     end
 
     OAI["OpenAI"]
-    ANT["Anthropic<br/>not wired yet"]
+    ANT["Anthropic"]
     GEM["Google<br/>not wired yet"]
     R[Client response]
     PG[("PostgreSQL")]
 
     C -->|Bearer key| AUTH --> ENT --> OWN --> QUOTA --> CTX --> PROV
     PROV -->|openai| OAI
-    PROV -.->|anthropic| ANT
+    PROV -->|anthropic| ANT
     PROV -.->|google| GEM
-    OAI --> SETTLE -->|JSON| R
+    OAI --> SETTLE
+    ANT --> SETTLE
+    SETTLE -->|JSON| R
     PROV -.->|exception / cancellation| REL
 
     GW -.-> PG
@@ -144,8 +146,9 @@ it. Admission is therefore a short, serialised reservation:
 
 1. `SELECT ... FOR UPDATE` locks the key's `api_keys` row, so concurrent requests on the
    same key queue here, on every replica, because the lock lives in Postgres.
-2. Under the lock, the ledger is summed and the prompt (counted with `tiktoken`) is checked
-   against the quota. `max_tokens` is clamped to what's left, and the request gets `429` if
+2. Under the lock, the ledger is summed and the prompt is checked against the quota. The
+   prompt is counted with the model's own tokenizer: `tiktoken` for OpenAI, Anthropic's
+   `count_tokens` endpoint for Claude. `max_tokens` is clamped to what's left, and the request gets `429` if
    nothing is.
 3. A `Reserved` usage row for `prompt + max_tokens` is inserted and committed, which also
    releases the lock. The next request's `SUM` already includes that reservation.
@@ -182,11 +185,27 @@ fail before, during or after tokens were generated, and each of those is billed 
 Errors raised before the first chunk arrives are free; a stream interrupted mid-generation
 still charges for what was produced, plus a fixed 15-token buffer, because the provider
 already did the work. When the stream finishes cleanly, the provider's own usage figures
-are recorded; if they never arrive, the gateway falls back to counting the streamed chunks
-with `tiktoken`. Every provider returns the same `provider_response` dataclass, so settling
-the ledger doesn't depend on which provider served the request. Messages are only saved
-once generation has started, so a failed call never adds an empty turn to the
-short-term memory.
+are recorded; if they never arrive, the gateway falls back to estimating from the streamed
+text. That estimate is exact for OpenAI (`tiktoken`). There is no local tokenizer for Claude,
+so an interrupted Anthropic stream is billed at roughly four characters per token, and never
+less than the last `output_tokens` figure Anthropic reported.
+
+Each provider sorts its SDK's exceptions into two groups. Errors the provider always raises
+before generating anything (bad request, auth, permission, not found, rate limit, request too
+large, connection failure) are non-billable. Errors that can arrive mid-stream (5xx, a
+mid-stream `overloaded_error` event, timeouts, a dropped connection) are billed only if
+generation had already started. Every provider returns the same `provider_response`
+dataclass, so settling the ledger doesn't depend on which provider served the request.
+Messages are only saved once generation has started, so a failed call never adds an empty
+turn to the short-term memory.
+
+**Claude-specific behaviour.** Anthropic requests carry a gateway-wide system prompt
+(`ANTHROPIC_SYSTEM_PROMPT`). Anthropic's reported `input_tokens` covers the system prompt,
+the history and the new prompt, so the gateway subtracts the history tokens and records the
+rest as `prompt_tokens`. That figure is never lower than the pre-call `count_tokens`
+estimate. If Claude declines a request (`stop_reason: "refusal"`), the tokens it generated
+are still billed, because Anthropic charges for them, and the usage row is recorded as
+`Refused` with status code `403`.
 
 ## Running it
 
@@ -197,7 +216,7 @@ git clone https://github.com/goutham-226/SentryKey.git
 cd SentryKey
 
 docker compose up -d
-cp .env.example .env          # set DATABASE_URL, OPENAI_API_KEY and REPLICATE_API_TOKEN
+cp .env.example .env          # set the variables listed below
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -208,10 +227,16 @@ python -m scripts.model_seed  # the model catalog (safe to re-run)
 uvicorn app.main:app --reload
 ```
 
-With the bundled Compose file, the database URL is
-`postgresql+asyncpg://kq:kq@localhost:5432/kqpostgres`. All three variables are required at
-startup — `REPLICATE_API_TOKEN` is only used by the `scripts/provider_test.py` smoke test,
-but the settings object refuses to load without it.
+| Variable | Used for |
+| :--- | :--- |
+| `DATABASE_URL` | With the bundled Compose file: `postgresql+asyncpg://kq:kq@localhost:5432/kqpostgres` |
+| `OPENAI_API_KEY` | OpenAI models |
+| `ANTHROPIC_API_KEY` | Claude models, and Claude prompt counting via `count_tokens` |
+| `ANTHROPIC_SYSTEM_PROMPT` | System prompt sent with every Claude request |
+| `REPLICATE_API_TOKEN` | Only the `scripts/provider_test.py` smoke test |
+
+All five are required at startup. The settings object refuses to load if any is missing,
+including `REPLICATE_API_TOKEN`.
 
 Interactive documentation is served at **http://127.0.0.1:8000/docs**, generated from the
 route signatures and Pydantic models, so it never drifts from the code.
@@ -260,7 +285,7 @@ Every commit then runs YAML validation, a large-file check, private-key detectio
 | 🔑 | `GET` | `/v1/keys` | List the caller's active keys by prefix, with `key_id` and quota. Revoked keys are hidden. `404` if the caller has no active keys. |
 | 🔑 | `DELETE` | `/v1/keys/{key_id}` | Revoke one of the caller's keys. The row is kept (`revoked_on` is set) so usage history survives, and the key is rejected with `401` from then on. `404` if the key doesn't exist or belongs to someone else. |
 | 🔑 | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if a subscription is already active. |
-| 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier. `404` for an unknown model, a model whose provider isn't wired up yet (Anthropic, Google), or a `conversation_id` that doesn't exist or belongs to a different key. `422` if `max_tokens` isn't positive. `429` once the daily budget is spent. |
+| 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier. `404` for an unknown model, a model whose provider isn't wired up yet (Google), or a `conversation_id` that doesn't exist or belongs to a different key. `422` if `max_tokens` isn't positive. `429` once the daily budget is spent. |
 | 🔐 | `GET` | `/v1/chat-history/{conversation_id}` | Full message log for a conversation owned by the caller's key. `404` if the conversation doesn't exist or belongs to a different key. |
 
 🔓 ![Public](https://img.shields.io/badge/auth-public-brightgreen) &nbsp;&middot;&nbsp; 🔑 ![Auth](https://img.shields.io/badge/auth-password-orange) &nbsp;&middot;&nbsp; 🔐 ![API Key](https://img.shields.io/badge/auth-bearer_token-blue)
@@ -336,8 +361,12 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 ```
 
 `max_tokens` is clamped to the remaining daily budget, under the reservation lock, before
-the request reaches the provider. The prompt is counted with `tiktoken` at that point, so
-neither a single call nor several concurrent ones can overrun the quota.
+the request reaches the provider. The prompt is counted at that point (`tiktoken` for
+OpenAI, `count_tokens` for Claude), so neither a single call nor several concurrent ones can
+overrun the quota.
+
+The same request works for Claude: set `"model"` to `claude-haiku-4-5` (Basic),
+`claude-sonnet-5` (Pro) or `claude-opus-5` (Premium).
 
 The HTTP status is `200` whenever the provider was reached. How the stream ended is
 recorded in the usage record's `status` and `status_code`:
@@ -346,6 +375,7 @@ recorded in the usage record's `status` and `status_code`:
 | :--- | :--- | :--- |
 | `Completed` | The stream finished normally. | Real usage reported by the provider |
 | `Interrupted` | The stream broke after tokens had started arriving. `output` holds what was generated. | Tokens received + 15-token buffer |
+| `Refused` | Claude declined the request (`stop_reason: "refusal"`). Recorded with status code `403`. | Real usage reported by Anthropic |
 | `Failed` | The provider failed before the first token, or the request raised before settling. `output` is a "model not available" message, and no messages are saved. | Nothing, the reservation is released |
 
 **4. Pull the conversation back.**
@@ -508,6 +538,8 @@ cascade from a key never fires in normal use.
 │       ├── provider_service.py  get_response orchestration — ownership check, quota reservation (row lock),
 │       │                        short-term memory, provider routing, settle / release of the reservation
 │       ├── open_ai.py           OpenAI streaming client, tiktoken counting, billable vs non-billable error handling
+│       ├── anthropic_ai.py      Anthropic streaming client, count_tokens counting, refusal handling,
+│       │                        billable vs non-billable error handling
 │       └── provider_data.py     provider_response dataclass — the one result shape every provider returns
 ├── tests/
 │   ├── __init__.py              Marks tests as a package
@@ -615,6 +647,35 @@ concurrent requests on that key wait.
 **Fix:** add a composite index on `(api_key_id, requested_at)` in a new Alembic revision.
 At higher scale, an atomic counter in Redis could take the `SUM` off the hot path entirely,
 with the ledger kept as the source of truth.
+
+### An empty Claude reply breaks the conversation
+
+Claude Opus 5 and Sonnet 5 think by default, and thinking tokens count toward `max_tokens`.
+With a small `max_tokens`, thinking can use the whole budget and the reply has no text. The
+request still settles as `Completed`, and an assistant message with empty content is saved.
+Anthropic rejects history that contains an empty assistant message, so every later Claude
+request in that conversation fails with `400`. The gateway also doesn't check
+`stop_reason: "max_tokens"`, so a truncated reply is reported as `Completed`.
+
+**Fix:** don't save an empty assistant message, skip empty messages in
+`trim_message_history`, and record `max_tokens` stops with their own status.
+
+### Claude prompts are counted twice
+
+`get_response` counts the prompt with `count_tokens` for the reservation, and
+`get_anthropic_response` counts it again. Each Claude request makes an extra round-trip
+before streaming starts, and that second call can fail the request with a `500`.
+
+**Fix:** pass the first count into `get_anthropic_response`.
+
+### `max_tokens` isn't capped per model
+
+`max_tokens` is clamped to the caller's remaining quota but not to the model's output limit.
+Claude Haiku 4.5 accepts at most 64K output tokens, so a larger request is rejected by
+Anthropic with `400`. It settles as `Failed` and nothing is billed, but the caller only sees
+the generic "model not available" message.
+
+**Fix:** store each model's output limit in the `models` table and clamp to it.
 
 ### `is_active` is not enforced
 

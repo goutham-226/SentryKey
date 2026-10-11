@@ -189,7 +189,7 @@ on a model with a higher tier requirement.
 """
 async def test_get_bearer_auth_raises_403_on_model_with_higher_tier(client,subscribed_user):
     # subscribe to Basic Tier
-    # available models = gp[t-5.6-luna , claude-haiku-4.5 , gemini-3.5-flash-lite
+    # available models = gp[t-5.6-luna , claude-haiku-4-5 , gemini-3.5-flash-lite
     credentials = await subscribed_user('Basic')
    
     email = credentials['email']

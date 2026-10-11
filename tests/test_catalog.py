@@ -20,7 +20,7 @@ id |       model_id        | provider  |     display_name      | min_tier_id | c
   6 | claude-sonnet-5       | anthropic | CLAUDE SONNET-5       |           2 |        1000000 | t         | 2026-10-03 09:28:05.747237 |           1.000000 |            5.000000 | max_tokens            |                100000
   7 | gpt-5.6-luna          | openai    | GPT-5.6 LUNA          |           3 |        1000000 | t         | 2026-10-03 09:28:05.750925 |           0.200000 |            1.200000 | max_completion_tokens |                100000
   8 | gemini-3.5-flash-lite | google    | GEMINI 3.5 FLASH LITE |           3 |        1000000 | t         | 2026-10-03 09:28:05.754119 |           0.250000 |            1.500000 | max_output_tokens     |                100000
-  9 | claude-haiku-4.5      | anthropic | CLAUDE HAIKU 4.5      |           3 |        1000000 | t         | 2026-10-03 09:28:05.756757 |           1.000000 |            4.000000 | max_tokens            |                100000
+  9 | claude-haiku-4-5      | anthropic | CLAUDE HAIKU 4.5      |           3 |        1000000 | t         | 2026-10-03 09:28:05.756757 |           1.000000 |            4.000000 | max_tokens            |                100000
 
 """
 async def test_models_catalog_returns_all_seeded_models_with_exact_provider_names_and_tier_id(client):
@@ -63,8 +63,8 @@ async def test_models_catalog_returns_all_seeded_models_with_exact_provider_name
     assert body[7]['model_name'] == 'gemini-3.5-flash-lite'
     assert body[7]['provider'] == 'google'
     assert body[7]['tier'] == 'Basic'
-    #assert claude-haiku-4.5
-    assert body[8]['model_name'] == 'claude-haiku-4.5'
+    #assert claude-haiku-4-5
+    assert body[8]['model_name'] == 'claude-haiku-4-5'
     assert body[8]['provider'] == 'anthropic'
     assert body[8]['tier'] == 'Basic'
 

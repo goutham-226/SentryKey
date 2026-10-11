@@ -46,7 +46,7 @@ async def seed():
             await db.commit()
         except IntegrityError:
             await db.rollback()
-        #seeding premium model claude-sonnet-5
+        #seeding premium model claude-opus-5
         model = Models(model_id='claude-opus-5',
                        provider='anthropic',
                        display_name='CLAUDE OPUS-5',
@@ -94,7 +94,7 @@ async def seed():
         except IntegrityError:
             await db.rollback()
         #await db.refresh(model)
-        # seeding pro model claude-haiku-4.5
+        # seeding pro model claude-sonnet-5
         model = Models(model_id='claude-sonnet-5',
                        provider='anthropic',
                        display_name='CLAUDE SONNET-5',
@@ -143,7 +143,7 @@ async def seed():
             await db.rollback()
         #await db.refresh(model)
         #seeding basic model 
-        model = Models(model_id='claude-haiku-4.5',
+        model = Models(model_id='claude-haiku-4-5',
                        provider='anthropic',
                        display_name='CLAUDE HAIKU 4.5',
                        min_tier_id=basic_id,
