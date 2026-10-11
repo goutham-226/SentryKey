@@ -334,7 +334,8 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
         if _provider == 'openai':
             model_response: provider_response = await get_openai_response(payload=payload,context=conversation_context,history_tokens=context_tokens)
 
-
+        elif _provider == 'anthropic':
+            model_response: provider_response = await get_anthropic_response(payload=payload,context=conversation_context,history_tokens=context_tokens)
 
 
         # update database
