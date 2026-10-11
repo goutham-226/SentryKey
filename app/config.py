@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     database_url: str
     replicate_api_token: str
     openai_api_key: str
+    anthropic_api_key: str
+    anthropic_system_prompt: str    
     default_monthly_quota: int = 100000
 
 @lru_cache #caches the object and returns the stored object without having to create a new object for every func call.
