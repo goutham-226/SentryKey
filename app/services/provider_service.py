@@ -21,6 +21,7 @@ from app.models import ApiKeys, UsageRecords, Models, Conversations, Messages
 #import dataclass
 from app.services.provider_data import provider_response
 from app.services.open_ai import get_openai_tokens, get_openai_response
+from app.services.anthropic_ai import get_anthropic_tokens, get_anthropic_response
 
 
 async def get_total_tokens(api_key: ApiKeys,prompt_tokens: int,payload: ChatRequest,db: AsyncSession) -> tuple[int, int, UsageRecords]:
@@ -268,11 +269,7 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
         prompt_tokens = await get_openai_tokens(text=_prompt)
 
     elif _provider == 'anthropic':
-        # model not available at this moment
-        raise HTTPException(
-                      status_code = 404,
-                      detail = 'Model not available at the moment.',
-                     ) 
+        prompt_tokens = await get_anthropic_tokens(text=_prompt,model=_model,role='user')
 
     elif _provider == 'google':
         # model not available at the moment
@@ -329,7 +326,10 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
         # unsupported providers already raised 404 before reserving tokens -> only wired providers reach here.
         # add an elif per provider as anthropic / google get wired.
         if _provider == 'openai':
-            model_response = await get_openai_response(payload=payload,context=conversation_context,history_tokens=context_tokens)
+            model_response: provider_response = await get_openai_response(payload=payload,context=conversation_context,history_tokens=context_tokens)
+
+        elif _provider == 'anthropic':
+            model_response: provider_response = await get_anthropic_response(payload=payload,context=conversation_context,history_tokens=context_tokens)
 
 
         # update database
