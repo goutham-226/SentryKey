@@ -29,11 +29,11 @@ async def get_total_tokens(api_key: ApiKeys,prompt_tokens: int,payload: ChatRequ
     A method to calculate
     total tokens used today.
 
-    To prevent Race conditons -> lock ApiKeys row for reading, and reserve max_tokens in a UsageRecords row with status 'Reserved' and status_code 429.
+    To prevent Race conditons -> caller must hold the ApiKeys row lock (taken in trim_message_history),
+    nothing may commit between that lock and this function's commit.
+    reserve max_tokens in a UsageRecords row with status 'Reserved' and status_code 429.
     """
     _max_tokens = payload.max_tokens
-    stmt = select(ApiKeys).where(ApiKeys.id == api_key.id).with_for_update() # lock the row for reading to prevent race conditions
-    result = await db.execute(stmt)
     stmt = select(func.coalesce(func.sum(UsageRecords.prompt_tokens + UsageRecords.completion_tokens),0)).where(
                                UsageRecords.api_key_id == api_key.id,
                                UsageRecords.requested_at > func.now() - text("INTERVAL '1 day'"),
@@ -80,7 +80,7 @@ async def get_model_provider(model: str,db: AsyncSession) -> str | None:
 async def create_conversation_id(payload: ChatRequest, api_key: ApiKeys,db: AsyncSession) -> Conversations:
     """
     Create a new conversation and return.
-    flush (not commit) -> get_tokens commits this,
+    flush (not commit) -> get_total_tokens commits this with the reservation,
     and release_reservation deletes it if the request fails.
     """
     conversation = Conversations(
@@ -125,7 +125,7 @@ async def trim_message_history(history: Sequence[Messages], api_key: ApiKeys, db
     return (trimmed messages, their total token count),
     ([], 0) if context cannot fit our quota budget.
     """
-    stmt = select(ApiKeys.daily_context_quota).where(ApiKeys.id == api_key.id)
+    stmt = select(ApiKeys.daily_context_quota).where(ApiKeys.id == api_key.id).with_for_update() # lock the row for reading to prevent race conditions
     result = await db.execute(stmt)
     daily_context_quota: int = result.scalar_one_or_none() or 0
    
