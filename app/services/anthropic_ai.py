@@ -31,7 +31,7 @@ UNAVAILABLE_MESSAGE = 'Sorry model is not available at the moment please try aga
 
 
 
-async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,str]], history_tokens: int) -> provider_response:
+async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,str]], history_tokens: int, prompt_tokens: int) -> provider_response:
     """
     send a request to Anthropic AI,
     and handle network Errors.
@@ -44,7 +44,7 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
     context.append(_request) # anthropic uses the same context format as openai, so we can append the user request to the context list.
     # initialise variables to set dataclass attributes.
     model_response: str = ''
-    prompt_tokens: int = await get_anthropic_tokens(payload.prompt, model=payload.model, role='user')
+    # prompt_tokens is passed in -> already counted by get_response, no second count_tokens call.
     completion_tokens: int = 0
     context_tokens: int = history_tokens
     status_code: int = 0

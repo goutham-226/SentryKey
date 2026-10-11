@@ -602,8 +602,9 @@ continuation are scoped, so one key can never recall another key's messages.
 
 Fixed in the provider-service refactor: the check-then-act race on concurrent requests (now
 a locked reservation), messages being written into another key's conversation (now a `404`
-before anything is reserved), and the pre-call prompt estimate using a word count (now
-`tiktoken`).
+before anything is reserved), the pre-call prompt estimate using a word count (now
+`tiktoken`), and the prompt being counted a second time inside each provider call (the
+count from `get_response` is now passed in).
 
 ### The context quota isn't reserved
 
@@ -659,14 +660,6 @@ request in that conversation fails with `400`. The gateway also doesn't check
 
 **Fix:** don't save an empty assistant message, skip empty messages in
 `trim_message_history`, and record `max_tokens` stops with their own status.
-
-### Claude prompts are counted twice
-
-`get_response` counts the prompt with `count_tokens` for the reservation, and
-`get_anthropic_response` counts it again. Each Claude request makes an extra round-trip
-before streaming starts, and that second call can fail the request with a `500`.
-
-**Fix:** pass the first count into `get_anthropic_response`.
 
 ### `max_tokens` isn't capped per model
 

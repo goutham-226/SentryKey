@@ -27,7 +27,7 @@ encoding = tiktoken.get_encoding('o200k_base')
 UNAVAILABLE_MESSAGE = 'Sorry model is not available at the moment please try again later or use a different model'
 
 
-async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]],history_tokens: int) -> provider_response:
+async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]],history_tokens: int, prompt_tokens: int) -> provider_response:
     """
     send a request to OpenAI,
     and handle network Errors.
@@ -39,7 +39,7 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
     context.append(_request)
     # initialise variables to set dataclass attributes.
     model_response: str = ''
-    prompt_tokens: int = await get_openai_tokens(payload.prompt)
+    # prompt_tokens is passed in -> already counted by get_response, no second tiktoken pass.
     completion_tokens: int = 0
     context_tokens: int = history_tokens
     status_code: int = 0

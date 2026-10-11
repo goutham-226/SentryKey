@@ -326,10 +326,10 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
         # unsupported providers already raised 404 before reserving tokens -> only wired providers reach here.
         # add an elif per provider as anthropic / google get wired.
         if _provider == 'openai':
-            model_response: provider_response = await get_openai_response(payload=payload,context=conversation_context,history_tokens=context_tokens)
+            model_response: provider_response = await get_openai_response(payload=payload,context=conversation_context,history_tokens=context_tokens,prompt_tokens=prompt_tokens)
 
         elif _provider == 'anthropic':
-            model_response: provider_response = await get_anthropic_response(payload=payload,context=conversation_context,history_tokens=context_tokens)
+            model_response: provider_response = await get_anthropic_response(payload=payload,context=conversation_context,history_tokens=context_tokens,prompt_tokens=prompt_tokens)
 
 
         # update database
