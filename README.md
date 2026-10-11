@@ -409,17 +409,19 @@ exist or belongs to someone else, so the endpoint never confirms another key's c
 ids exist.
 
 **5. Switch models mid-conversation.** Send the same `conversation_id` with a different
-`model`. The conversation carries on, and the new model receives the earlier turns as context.
+`model`, even one from another provider. The conversation carries on, and the new model
+receives the earlier turns as context.
 
 Entitlement is checked on every request against the model named in that request, not the one
-the conversation started on. Asha is on Basic, so moving up to `gpt-5.6-terra` is refused:
+the conversation started on. Asha is on Basic, so carrying the GPT conversation over to
+`claude-sonnet-5` (Pro) is refused:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/chat/completions \
   -H 'Authorization: Bearer kq_z9_Nuql9B9YsDYmhBfWPvBLvlCeXzIU' \
   -H 'Content-Type: application/json' \
   -d '{
-        "model": "gpt-5.6-terra",
+        "model": "claude-sonnet-5",
         "prompt": "Which language was that software written in?",
         "max_tokens": 512,
         "conversation_id": 1
@@ -432,17 +434,18 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 }
 ```
 
-| Tier    | GPT models available                           |
-|---------|------------------------------------------------|
-| Basic   | `gpt-5.6-luna`                                 |
-| Pro     | `gpt-5.6-luna`, `gpt-5.6-terra`                |
-| Premium | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` |
+| Tier    | OpenAI models available                        | Anthropic models available                              |
+|---------|------------------------------------------------|---------------------------------------------------------|
+| Basic   | `gpt-5.6-luna`                                 | `claude-haiku-4-5`                                      |
+| Pro     | `gpt-5.6-luna`, `gpt-5.6-terra`                | `claude-haiku-4-5`, `claude-sonnet-5`                   |
+| Premium | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` | `claude-haiku-4-5`, `claude-sonnet-5`, `claude-opus-5`  |
 
-On a Pro subscription, the same request goes through and the reply is added to conversation `1`:
+On a Pro subscription, the same request goes through: Claude receives the GPT turns as
+context, and its reply is added to conversation `1`:
 
 ```json
 {
-  "model": "gpt-5.6-terra",
+  "model": "claude-sonnet-5",
   "output": "The AGC software was written in an assembly language...",
   "prompt_tokens": 9,
   "completion_tokens": 402,
@@ -472,14 +475,14 @@ How the history is carried over (short-term memory):
   `prompt_tokens`. That's why the figure above is only the new prompt, and why continuing a
   conversation costs the same daily token quota as starting one.
 - Every message stores the model that produced it, so `/v1/chat-history/1` shows where the
-  switch happened:
+  conversation moved from OpenAI to Anthropic:
 
 ```json
 [
-  { "conversation_id": 1, "role": "user",      "message": "Explain the computer programs...", "model": "gpt-5.6-luna",  "timestamp": "..." },
-  { "conversation_id": 1, "role": "assistant", "message": "The Apollo Guidance Computer...",  "model": "gpt-5.6-luna",  "timestamp": "..." },
-  { "conversation_id": 1, "role": "user",      "message": "Which language was that...",      "model": "gpt-5.6-terra", "timestamp": "..." },
-  { "conversation_id": 1, "role": "assistant", "message": "The AGC software was written...", "model": "gpt-5.6-terra", "timestamp": "..." }
+  { "conversation_id": 1, "role": "user",      "message": "Explain the computer programs...", "model": "gpt-5.6-luna",    "timestamp": "..." },
+  { "conversation_id": 1, "role": "assistant", "message": "The Apollo Guidance Computer...",  "model": "gpt-5.6-luna",    "timestamp": "..." },
+  { "conversation_id": 1, "role": "user",      "message": "Which language was that...",      "model": "claude-sonnet-5", "timestamp": "..." },
+  { "conversation_id": 1, "role": "assistant", "message": "The AGC software was written...", "model": "claude-sonnet-5", "timestamp": "..." }
 ]
 ```
 
