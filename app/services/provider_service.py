@@ -24,7 +24,7 @@ from app.services.open_ai import get_openai_tokens, get_openai_response
 from app.services.anthropic_ai import get_anthropic_tokens, get_anthropic_response
 
 
-async def get_total_tokens(api_key: ApiKeys,prompt_tokens: int,payload: ChatRequest,db: AsyncSession) -> tuple[int, int, UsageRecords]:
+async def get_total_tokens(api_key: ApiKeys,prompt_tokens: int,payload: ChatRequest,context_tokens: int,db: AsyncSession) -> tuple[int, int, UsageRecords]:
     """
     A method to calculate
     total tokens used today.
@@ -60,7 +60,7 @@ async def get_total_tokens(api_key: ApiKeys,prompt_tokens: int,payload: ChatRequ
             )
 
     # reserve max_tokens to prevent race conditions where multiple requests are made at the same time and exceed the daily quota.
-    reserve = UsageRecords(prompt_tokens=prompt_tokens,completion_tokens=_max_tokens,context_tokens=0,status='Reserved',status_code=429,api_key_id=api_key.id)
+    reserve = UsageRecords(prompt_tokens=prompt_tokens,completion_tokens=_max_tokens,context_tokens=context_tokens,status='Reserved',status_code=429,api_key_id=api_key.id)
     db.add(reserve)
     await db.commit() # commit the reserved tokens to the database to prevent race conditions.
     return total_tokens_used, _max_tokens, reserve
@@ -286,42 +286,42 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
 
     # if conversation_id doesnt match users api_key raise an error.
     # checked before reserving tokens -> a 404 here never leaves a reservation behind.
-    new_conversation = payload.conversation_id is None or payload.conversation_id == 0
-    if not new_conversation:
-        await raise_404_on_conversation_id_with_wrong_api_key(api_key=api_key,conversation_id=payload.conversation_id,db=db)
 
-    total_tokens_used, _max_tokens, reservations = await get_total_tokens(api_key=api_key,prompt_tokens=prompt_tokens,payload=payload,db=db)
+    created_conversation_id: int | None = None
+
+    new_conversation: bool = payload.conversation_id is None or payload.conversation_id == 0
+    if not new_conversation: # conversation_id is provided -> check if it belongs to the api_key.
+        await raise_404_on_conversation_id_with_wrong_api_key(api_key=api_key,conversation_id=payload.conversation_id,db=db)
+      
+    else:
+        conversation = await create_conversation_id(payload=payload,api_key=api_key,db=db)
+        payload.conversation_id = conversation.id
+        created_conversation_id = conversation.id
+    
+    # get message histroy and handle context token budgeting.
+    # short-term memory previous 8 messages (4-user + 4-assistant messages)
+    message_history: Sequence[Messages]  = await get_message_history(conversation_id=payload.conversation_id,db=db)
+    
+    # trim messages so context tokens do'nt exceed daily limit.
+    conversation_context, context_tokens = await trim_message_history(history=message_history,api_key=api_key,db=db)
+    
+    # end the transaction before the provider call -> returns the connection to the pool
+    # instead of holding it idle while the model responds. also commits a new conversation.
+    # update_usage_history checks out a connection again to settle the reservation.
+    await db.commit()
+    
+
+    total_tokens_used, _max_tokens, reservations = await get_total_tokens(api_key=api_key,prompt_tokens=prompt_tokens,payload=payload,context_tokens=context_tokens,db=db)
     # read the id now -> release_reservation rolls back, which expires the row object.
     reservation_id: int = reservations.id
 
     # change payloads max_tokens value
     payload.max_tokens = _max_tokens
 
-    # id of a conversation created by this request -> deleted on failure.
-    created_conversation_id: int | None = None
+   
 
     # any failure from here until the reservation is settled must release it.
     try:
-        # create conversation history
-        # if no conversation_id was passed in create a new id
-        if new_conversation:
-            conversation = await create_conversation_id(payload=payload,api_key=api_key,db=db)
-            payload.conversation_id = conversation.id
-            created_conversation_id = conversation.id
-
-        # get message histroy and handle context token budgeting.
-        # short-term memory previous 8 messages (4-user + 4-assistant messages)
-        message_history: Sequence[Messages]  = await get_message_history(conversation_id=payload.conversation_id,db=db)
-
-        # trim messages so context tokens do'nt exceed daily limit.
-        conversation_context, context_tokens = await trim_message_history(history=message_history,api_key=api_key,db=db)
-
-        # end the transaction before the provider call -> returns the connection to the pool
-        # instead of holding it idle while the model responds. also commits a new conversation.
-        # update_usage_history checks out a connection again to settle the reservation.
-        await db.commit()
-
-
         # send request to a provider.
         # unsupported providers already raised 404 before reserving tokens -> only wired providers reach here.
         # add an elif per provider as anthropic / google get wired.
