@@ -23,6 +23,7 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 # create async anthropic client.
+
 client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 # message returned to the caller when a request fails without producing any tokens.
