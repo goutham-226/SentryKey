@@ -80,8 +80,8 @@ flowchart TB
         AUTH["Auth<br/>key hash → api_key → user"]
         ENT["Entitlement<br/>subscription tier ≥ model tier"]
         OWN["Ownership<br/>conversation_id belongs to key"]
-        QUOTA["Reserve<br/>lock key row → SUM last 24h → insert reservation"]
-        CTX["Short-term memory<br/>last 8 messages within context quota"]
+        CTX["Short-term memory<br/>lock key row → context SUM → last 8 messages that fit"]
+        QUOTA["Reserve<br/>token SUM → insert reservation (tokens + context)"]
         PROV["Provider client"]
         SETTLE["Settle<br/>reservation → real usage + messages"]
         REL["Release<br/>reservation → 0 tokens"]
@@ -93,7 +93,7 @@ flowchart TB
     R[Client response]
     PG[("PostgreSQL")]
 
-    C -->|Bearer key| AUTH --> ENT --> OWN --> QUOTA --> CTX --> PROV
+    C -->|Bearer key| AUTH --> ENT --> OWN --> CTX --> QUOTA --> PROV
     PROV -->|openai| OAI
     PROV -->|anthropic| ANT
     PROV -.->|google| GEM
@@ -145,19 +145,28 @@ lets two concurrent requests read the same remaining budget, both pass, and toge
 it. Admission is therefore a short, serialised reservation:
 
 1. `SELECT ... FOR UPDATE` locks the key's `api_keys` row, so concurrent requests on the
-   same key queue here, on every replica, because the lock lives in Postgres.
-2. Under the lock, the ledger is summed and the prompt is checked against the quota. The
+   same key queue here, on every replica, because the lock lives in Postgres. The lock is
+   taken while reading the key's context quota, before the history is trimmed.
+2. Under the lock, the ledger's `context_tokens` are summed and the history is trimmed to
+   what's left of the context quota (see short-term memory below). Then the ledger's tokens
+   are summed and the prompt is checked against the token quota. The
    prompt is counted with the model's own tokenizer: `tiktoken` for OpenAI, Anthropic's
    `count_tokens` endpoint for Claude. `max_tokens` is clamped to what's left, and the request gets `429` if
    nothing is.
-3. A `Reserved` usage row for `prompt + max_tokens` is inserted and committed, which also
-   releases the lock. The next request's `SUM` already includes that reservation.
+3. A `Reserved` usage row for `prompt + max_tokens`, carrying the trimmed history's size in
+   `context_tokens`, is inserted and committed, which also releases the lock. Nothing
+   commits between taking the lock and this point, so the next request's token and context
+   `SUM`s both already include that reservation. A conversation created by this request is
+   flushed earlier but only committed here, so a `429` leaves no empty conversation behind.
 4. After the provider call, the same row is **settled**: overwritten with the real token
    counts, so any unused budget comes back immediately.
 5. If anything raises before settlement, including `asyncio.CancelledError` from a client
-   disconnect, the reservation is **released** (set to 0 tokens, status `Failed`) and any
-   conversation the request created is deleted. The release runs inside a shielded
-   `anyio.CancelScope`, so the cancellation can't interrupt the cleanup itself.
+   disconnect, the reservation is **released** (set to 0 tokens and 0 context tokens, status
+   `Failed`) and any conversation the request created is deleted. The release runs inside a
+   shielded `anyio.CancelScope`, so the cancellation can't interrupt the cleanup itself. It
+   only touches a row that is still `Reserved`: if the request is cancelled just after
+   settlement committed, the settled row, its conversation and its messages are left alone.
+   A release that itself fails is logged and the original exception is re-raised.
 
 The lock is held only for a few statements, never across the provider stream, so a slow
 response on one request doesn't block the next request on that key.
@@ -172,7 +181,9 @@ conversation's 8 most recent messages (4 user + 4 assistant), walked newest to o
 kept whole while they fit the key's remaining daily context quota. The first message that
 doesn't fit is dropped along with everything older, and a leading assistant message is
 removed so the context always opens with a user turn. History is billed to the separate
-context quota, not the main token quota. Older turns are kept in the database but not sent
+context quota, not the main token quota. It is counted and trimmed under the same row lock
+as the token reservation, and reserved on the same usage row, so concurrent requests can't
+spend the same context budget twice. Older turns are kept in the database but not sent
 to the model; bringing the relevant ones back is the job of the planned
 [long-term memory](#roadmap-long-term-memory).
 
@@ -609,14 +620,11 @@ before anything is reserved), the pre-call prompt estimate using a word count (n
 `tiktoken`), and the prompt being counted a second time inside each provider call (the
 count from `get_response` is now passed in).
 
-### The context quota isn't reserved
-
-The token quota is checked and reserved under the `api_keys` row lock, but the context
-quota is read afterwards, once the lock has been released. Two concurrent requests that
-continue conversations can both see the same remaining context budget and together go over it.
-
-**Fix:** compute the trimmed history inside the locked section and write its size into the
-reservation row's `context_tokens`, so the next request's `SUM` already sees it.
+Fixed since: the context quota not being reserved. The history is now trimmed inside the
+locked section and its size is written into the reservation row's `context_tokens`, so the
+next request's context `SUM` already sees it. Moving the commit to the reservation also
+means a new conversation is no longer left behind when the request is refused with `429`,
+and a cancellation that lands just after settlement no longer wipes the settled row.
 
 ### A crashed worker leaves its reservation behind
 
@@ -636,7 +644,8 @@ budget comes back as soon as the first request settles.
 
 ### Empty conversations on failed first turns
 
-A new conversation is committed before the provider call. If that call fails before
+A new conversation is committed together with the reservation, before the provider call.
+If that call fails before
 generating anything, the request settles normally with nothing billed and no messages saved,
 but the empty conversation stays. Conversations are only deleted when the request raises.
 
@@ -644,9 +653,9 @@ but the empty conversation stays. Conversations are only deleted when the reques
 
 Every chat request runs two `SUM`s over `usage_records`, one for tokens and one for context,
 filtered by `api_key_id` and the last 24 hours. No migration creates an index on
-`(api_key_id, requested_at)`, so each check scans more rows as the table grows. The token
-`SUM` now runs while the key's row lock is held, so a slow `SUM` also lengthens how long
-concurrent requests on that key wait.
+`(api_key_id, requested_at)`, so each check scans more rows as the table grows. Both `SUM`s
+run while the key's row lock is held, so a slow `SUM` also lengthens how long concurrent
+requests on that key wait.
 
 **Fix:** add a composite index on `(api_key_id, requested_at)` in a new Alembic revision.
 At higher scale, an atomic counter in Redis could take the `SUM` off the hot path entirely,
