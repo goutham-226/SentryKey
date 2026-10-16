@@ -23,6 +23,7 @@ from app.models import ApiKeys, UsageRecords, Models, Conversations, Messages
 from app.services.provider_data import provider_response
 from app.services.open_ai import get_openai_tokens, get_openai_response
 from app.services.anthropic_ai import get_anthropic_tokens, get_anthropic_response
+from app.services.google_ai import get_gemini_tokens, get_gemini_response, get_replicate_response
 
 
 logger = logging.getLogger(__name__)
@@ -281,10 +282,7 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
 
     elif _provider == 'google':
         # model not available at the moment
-        raise HTTPException(
-                       status_code = 404,
-                       detail = 'Model not available at the moment.',
-                     )
+        prompt_tokens = await get_gemini_tokens(text=_prompt,model=_model)
 
     else:
         raise HTTPException(
@@ -336,7 +334,11 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
         elif _provider == 'anthropic':
             model_response: provider_response = await get_anthropic_response(payload=payload,context=conversation_context,history_tokens=context_tokens,prompt_tokens=prompt_tokens)
 
+        elif _provider == 'google' and _model != 'google/gemini-3.1-pro':
+            model_response: provider_response = await get_gemini_response(payload=payload,context=conversation_context,history_tokens=context_tokens,prompt_tokens=prompt_tokens)
 
+        elif _provider == 'google' and _model == 'google/gemini-3.1-pro':
+            model_response: provider_response = await get_replicate_response(payload=payload,context=conversation_context,history_tokens=context_tokens,prompt_tokens=prompt_tokens)
         # update database
         await update_usage_history(payload=payload,api_key=api_key,model_response=model_response,row=reservations,db=db)
 
