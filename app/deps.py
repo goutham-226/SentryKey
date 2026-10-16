@@ -71,7 +71,7 @@ async def get_bearer_key(payload: ChatRequest,credentials: HTTPAuthorizationCred
     stmt = select(Models).where(Models.model_id == payload.model)
     result = await db.execute(stmt)
     model = result.scalar_one_or_none()
-    if model is None:
+    if model is None or not model.is_active:
         raise HTTPException(
             status_code=404,
             detail='model not found',
