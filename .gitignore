@@ -4,3 +4,4 @@ __pycache__/
 .env
 .idea/
 *.swp
+tests/1q
