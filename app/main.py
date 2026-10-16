@@ -219,6 +219,7 @@ async def revoke_key(key_id: int,user: Users = Depends(get_current_user),db: Asy
     stmt = update(ApiKeys).where(
                ApiKeys.id == key_id,
                ApiKeys.user_id == user.id,
+               ApiKeys.revoked_on == None,
              ).values(revoked_on = func.now())
     result = await db.execute(stmt)
     if result.rowcount == 0:
