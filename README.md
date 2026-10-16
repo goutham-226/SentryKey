@@ -4,7 +4,7 @@
 
 **A multi-provider AI gateway with metered access, tiered models, and persistent conversation memory.**
 
-A single endpoint for nine top AI models across three providers. It tracks your daily token usage, manages API keys, and seamlessly holds onto your conversation history even when you switch models mid-chat.
+One endpoint for nine AI models from three providers. It tracks daily token usage, manages API keys, and keeps your conversation history even when you switch models mid-chat.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/goutham-226/SentryKey/python-app.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/goutham-226/SentryKey/actions)
 [![Python](https://img.shields.io/badge/python-3.14-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
@@ -31,16 +31,15 @@ A single endpoint for nine top AI models across three providers. It tracks your 
 
 ## Overview
 
-Talking to several model providers directly means several SDKs, several billing accounts,
-several sets of credentials, and no single answer to "what did this cost and who spent it."
+Using several AI providers directly means juggling several SDKs, API keys and bills. It also
+leaves no single place to see who spent what.
 
-**SentryKey** is the layer that fixes that. It exposes one endpoint, routes to whichever
-model the caller asked for, and owns everything that sits between a request and an
-inference call: who is asking, whether they are entitled to that model, how much they have
-spent in the last 24 hours, and what the conversation so far consisted of.
+**SentryKey** puts one endpoint in front of all of them. It checks who is calling, whether
+their plan covers the model, and how much they've used today. Then it forwards the request
+and remembers the conversation.
 
-Access is tiered, and enforced at the gateway rather than trusted to the client. Each plan
-unlocks its own set of models — a plan reaches the models listed under it and models listed in lower tiers.
+Each plan unlocks the models in its own tier and every tier below it. The gateway enforces
+this, not the client.
 
 | Tier | Provider | Model | Context |
 | :--- | :--- | :--- | ---: |
@@ -54,20 +53,21 @@ unlocks its own set of models — a plan reaches the models listed under it and 
 | | [![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white)](https://www.anthropic.com/) | Claude Haiku 4.5 | 200k |
 | | [![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white)](https://gemini.google/in/about/?hl=en-IN) | Gemini 3.5 Flash-Lite | 1M+ |
 
-Every API key gets the same budget whatever the plan: 100,000 tokens per rolling 24 hours,
-plus a separate 100,000-token daily allowance for conversation history. The plan buys
-capability, not volume. The catalog lives in the database, so adding a model, moving one
-between tiers or pulling one during an incident is an `UPDATE` rather than a deploy.
+**Quotas.** Every API key gets 100,000 tokens per rolling 24 hours, whatever the plan. A
+separate 100,000-token allowance covers conversation history. Plans buy access to better
+models, not more volume.
 
-OpenAI and Anthropic models are wired up end-to-end today, each streamed directly against
-its own SDK with per-event token accounting. Google is catalogued and gated by tier already,
-but returns `404 Model not available at the moment.` until its provider client lands.
+**Catalog in the database.** Adding a model or moving it between tiers is a
+database `UPDATE`, not a redeploy.
 
-Because history lives in the gateway rather than the client, a conversation is portable
-across models. Start on one model, continue on another, and the thread comes with you. Each
-request carries a **short-term memory** of the conversation's last four exchanges (four user
-messages and four assistant replies). A **long-term memory** that uses vector search to pull
-relevant details from older turns is [planned](#roadmap-long-term-memory).
+**Provider status.** OpenAI and Anthropic work end to end, streamed through their own SDKs.
+Google models are listed and tier-gated, but return `404 Model not available at the moment.`
+until their client is built.
+
+**Portable conversations.** History lives in the gateway, so you can start a chat on one
+model and continue it on another. Each request includes the last four exchanges as
+**short-term memory**. A vector-search **long-term memory** is
+[planned](#roadmap-long-term-memory).
 
 ## Architecture
 
@@ -79,6 +79,7 @@ flowchart TB
         direction TB
         AUTH["Auth<br/>key hash → api_key → user"]
         ENT["Entitlement<br/>subscription tier ≥ model tier"]
+        COUNT["Count prompt<br/>tiktoken / count_tokens"]
         OWN["Ownership<br/>conversation_id belongs to key"]
         CTX["Short-term memory<br/>lock key row → context SUM → last 8 messages that fit"]
         QUOTA["Reserve<br/>token SUM → insert reservation (tokens + context)"]
@@ -93,7 +94,7 @@ flowchart TB
     R[Client response]
     PG[("PostgreSQL")]
 
-    C -->|Bearer key| AUTH --> ENT --> OWN --> CTX --> QUOTA --> PROV
+    C -->|Bearer key| AUTH --> ENT --> COUNT --> OWN --> CTX --> QUOTA --> PROV
     PROV -->|openai| OAI
     PROV -->|anthropic| ANT
     PROV -.->|google| GEM
@@ -105,135 +106,138 @@ flowchart TB
     GW -.-> PG
 ```
 
-Authentication and entitlement run as a FastAPI dependency before the handler is reached.
-Conversation ownership and the quota reservation run before any provider call, so no
-upstream request is ever made for a caller who isn't allowed one. Every request that
-reaches a provider settles its usage record, including ones that fail mid-stream, so
-partially generated tokens are still billed.
+A request goes through these steps in order:
 
-A request uses one database session, but its transaction is committed before the provider
-call, which hands the connection back to the pool. A slow or hanging upstream stream
-therefore never holds a pooled connection, an open transaction or a row lock. The session
-checks a connection out again afterwards to settle the reservation.
+1. **Auth and entitlement** run as a FastAPI dependency, before the route handler.
+2. **The prompt is counted** with the model's own tokenizer. For Claude this is a network
+   call, so it happens before any lock is taken.
+3. **Ownership and quota** are checked. A caller who isn't allowed never triggers a
+   provider call.
+4. **The provider is called.** The database transaction is committed first, so a slow
+   stream never holds a connection, transaction or row lock.
+5. **Usage is settled**, even if the stream failed partway. Tokens already generated are
+   still billed.
 
 ## Design
 
-Nine constraints shape the implementation. Each rules out the obvious naive approach.
+### Keys
 
-**Raw keys are never stored.** Only a SHA-256 digest and a short display prefix are
-persisted. Authentication hashes the presented key and looks up the digest, so the lookup
-stays a single query on a unique column while a database dump stays unusable. A lost key is
-replaced, never recovered.
+**Raw keys are never stored.** Only a SHA-256 hash and a short display prefix are saved.
+A leaked database dump can't be used to make requests. A lost key is replaced, not
+recovered.
 
-**Keys are revoked, never deleted.** Revoking a key sets `revoked_on` instead of removing
-the row. Authentication rejects any key with a revocation date, while its conversations
-and usage records — which would otherwise cascade away — stay intact for billing and audit.
+**Keys are revoked, not deleted.** Revoking sets `revoked_on`. The key stops working, but its
+conversations and usage records stay for billing and audit.
 
-**Entitlement is derived, never cached on the user.** A user has no tier column. The active
-subscription — a dated row, not a flag — is the only answer to what they may reach, so
-expiry is a fact about time rather than a state something must remember to update. Tiers
-carry a numeric `rank` (Basic 10, Pro 20, Premium 30), and a request is allowed when the
-subscription's rank is at least the model's minimum tier rank.
+### Entitlement
 
-**Spend is a ledger, not a counter.** Every request writes a usage row with real token
-counts reported by the provider. Remaining quota is a `SUM` over the key's rows from the
-last 24 hours — a rolling window, not a calendar day. Nothing increments a running total,
-so nothing can drift, and several replicas agree without coordinating.
+Users have no tier column. Their plan comes from the active row in `subscriptions`, which has
+start and end dates. Expiry happens on its own; nothing has to flip a flag.
 
-**Quota is reserved before the call, not checked and hoped for.** A plain check-then-write
-lets two concurrent requests read the same remaining budget, both pass, and together overrun
-it. Admission is therefore a short, serialised reservation:
+Tiers have a numeric `rank`: Basic 10, Pro 20, Premium 30. A request is allowed if the
+subscription's rank is at least the model's minimum rank.
 
-1. `SELECT ... FOR UPDATE` locks the key's `api_keys` row, so concurrent requests on the
-   same key queue here, on every replica, because the lock lives in Postgres. The lock is
-   taken while reading the key's context quota, before the history is trimmed.
-2. Under the lock, the ledger's `context_tokens` are summed and the history is trimmed to
-   what's left of the context quota (see short-term memory below). Then the ledger's tokens
-   are summed and the prompt is checked against the token quota. The
-   prompt is counted with the model's own tokenizer: `tiktoken` for OpenAI, Anthropic's
-   `count_tokens` endpoint for Claude. `max_tokens` is clamped to what's left, and the request gets `429` if
-   nothing is.
-3. A `Reserved` usage row for `prompt + max_tokens`, carrying the trimmed history's size in
-   `context_tokens`, is inserted and committed, which also releases the lock. Nothing
-   commits between taking the lock and this point, so the next request's token and context
-   `SUM`s both already include that reservation. A conversation created by this request is
-   flushed earlier but only committed here, so a `429` leaves no empty conversation behind.
-4. After the provider call, the same row is **settled**: overwritten with the real token
-   counts, so any unused budget comes back immediately.
-5. If anything raises before settlement, including `asyncio.CancelledError` from a client
-   disconnect, the reservation is **released** (set to 0 tokens and 0 context tokens, status
-   `Failed`) and any conversation the request created is deleted. The release runs inside a
-   shielded `anyio.CancelScope`, so the cancellation can't interrupt the cleanup itself. It
-   only touches a row that is still `Reserved`: if the request is cancelled just after
-   settlement committed, the settled row, its conversation and its messages are left alone.
-   A release that itself fails is logged and the original exception is re-raised.
+### The usage ledger
 
-The lock is held only for a few statements, never across the provider stream, so a slow
-response on one request doesn't block the next request on that key.
+Every request writes a row to `usage_records` with the real token counts from the provider.
+Remaining quota is a `SUM` over the last 24 hours of rows. Nothing keeps a running counter,
+so nothing can drift, and multiple servers agree without coordinating.
 
-**Context is assembled per request, against the model being used now.** Context windows
-differ by an order of magnitude across the catalog, so a conversation is a message log
-with no model attached and the history budget is recomputed every turn. Switching models
-mid-thread is a supported operation rather than a corruption.
+### Reserving quota
 
-**Short-term memory is the last four exchanges.** Each request carries at most the
-conversation's 8 most recent messages (4 user + 4 assistant), walked newest to oldest and
-kept whole while they fit the key's remaining daily context quota. The first message that
-doesn't fit is dropped along with everything older, and a leading assistant message is
-removed so the context always opens with a user turn. History is billed to the separate
-context quota, not the main token quota. It is counted and trimmed under the same row lock
-as the token reservation, and reserved on the same usage row, so concurrent requests can't
-spend the same context budget twice. Older turns are kept in the database but not sent
-to the model; bringing the relevant ones back is the job of the planned
-[long-term memory](#roadmap-long-term-memory).
+A plain "check, then call" lets two parallel requests both see the same budget and overspend
+it together. So quota is **reserved** before the call:
 
-**Schema changes go through migrations.** Every table is defined by a reversible Alembic
-revision, and the subscription tiers themselves are seeded by one. No table is altered by
-hand, in any environment.
+1. **Lock.** `SELECT ... FOR UPDATE` locks the key's `api_keys` row. Parallel requests on
+   the same key wait here, even across servers, because the lock lives in Postgres.
+2. **Check.** Under the lock, the history is trimmed to the remaining context quota. Then
+   the prompt (already counted) is checked against the token quota. `max_tokens` is lowered
+   to whatever is left, or the request gets `429`.
+3. **Reserve.** A `Reserved` row for `prompt + max_tokens` is inserted, along with the
+   history size in `context_tokens`. Committing it releases the lock. The next request's
+   `SUM`s already include it. A new conversation is committed at this point too, so a `429`
+   leaves nothing behind.
+4. **Settle.** After the call, the same row is overwritten with the real token counts.
+   Unused budget comes back immediately.
+5. **Release.** If anything raises before settling, including a client disconnect, the row
+   is set to 0 tokens with status `Failed`. Any conversation the request created is deleted.
 
-**Streaming is billed by what actually happened, not by the request.** A provider call can
-fail before, during or after tokens were generated, and each of those is billed differently.
-Errors raised before the first chunk arrives are free; a stream interrupted mid-generation
-still charges for what was produced, plus a fixed 15-token buffer, because the provider
-already did the work. When the stream finishes cleanly, the provider's own usage figures
-are recorded; if they never arrive, the gateway falls back to estimating from the streamed
-text. That estimate is exact for OpenAI (`tiktoken`). There is no local tokenizer for Claude,
-so an interrupted Anthropic stream is billed at roughly four characters per token, and never
-less than the last `output_tokens` figure Anthropic reported.
+The release runs inside a shielded `anyio.CancelScope`, so a cancellation can't interrupt
+it. It only touches rows still marked `Reserved`, so a request cancelled just after settling
+keeps its data. If the release itself fails, it is logged and the original error is
+re-raised.
 
-Each provider sorts its SDK's exceptions into two groups. Errors the provider always raises
-before generating anything (bad request, auth, permission, not found, rate limit, request too
-large, connection failure) are non-billable. Errors that can arrive mid-stream (5xx, a
-mid-stream `overloaded_error` event, timeouts, a dropped connection) are billed only if
-generation had already started. Every provider returns the same `provider_response`
-dataclass, so settling the ledger doesn't depend on which provider served the request.
-Messages are only saved once generation has started, so a failed call never adds an empty
-turn to the short-term memory.
+The lock is held for a few statements only, never during the provider stream.
 
-**Claude-specific behaviour.** Anthropic requests carry a gateway-wide system prompt
-(`ANTHROPIC_SYSTEM_PROMPT`). Anthropic's reported `input_tokens` covers the system prompt,
-the history and the new prompt, so the gateway subtracts the history tokens and records the
-rest as `prompt_tokens`. That figure is never lower than the pre-call `count_tokens`
-estimate. If Claude declines a request (`stop_reason: "refusal"`), the tokens it generated
-are still billed, because Anthropic charges for them, and the usage row is recorded as
-`Refused` with status code `403`.
+### Short-term memory
+
+Conversations are a plain message log with no model attached. Context is rebuilt on every
+request for whichever model is being used, so switching models mid-chat just works.
+
+Each request takes up to the **last 8 messages** (4 user + 4 assistant). They're walked
+newest to oldest and kept while they fit the key's remaining context quota. The first one
+that doesn't fit is dropped along with everything older. A leading assistant message is
+removed so the history always starts with a user turn.
+
+History is billed to the context quota, not the token quota. It's counted under the same
+lock and reserved on the same row, so parallel requests can't spend it twice. Older messages
+stay in the database but aren't sent to the model.
+
+### Streaming and billing
+
+A provider call can fail before, during or after generating tokens. Each case is billed
+differently:
+
+- **Fails before the first chunk:** free.
+- **Breaks mid-stream:** billed for what was generated, plus a 15-token buffer.
+- **Finishes:** billed using the provider's reported usage. If that never arrives, the
+  gateway estimates from the streamed text.
+
+The estimate is exact for OpenAI (`tiktoken`). Claude has no local tokenizer, so an
+interrupted Claude stream is billed at about 4 characters per token, and never less than
+Anthropic's last reported `output_tokens`.
+
+Each provider sorts its SDK errors into two groups:
+
+- **Never billable:** bad request, auth, permission, not found, rate limit, request too
+  large, connection failure. These always happen before generation.
+- **Billable if generation started:** 5xx errors, a mid-stream `overloaded_error`,
+  timeouts, dropped connections.
+
+Every provider returns the same `provider_response` dataclass, so settling doesn't care which
+provider ran. Messages are saved only once generation has started, so a failed call never
+adds an empty turn to the history.
+
+### Claude specifics
+
+- Every Claude request carries a system prompt set by `ANTHROPIC_SYSTEM_PROMPT`.
+- Anthropic's `input_tokens` includes the system prompt, history and new prompt. The gateway
+  subtracts the history and records the rest as `prompt_tokens`, never less than the
+  pre-call count.
+- If Claude refuses (`stop_reason: "refusal"`), the tokens are still billed, because
+  Anthropic charges for them. The row is recorded as `Refused` with status code `403`.
+
+### Migrations
+
+Every table is created by a reversible Alembic revision. The subscription tiers are seeded by
+one too. Nothing is altered by hand.
 
 ## Running it
 
-**Requirements:** Python 3.14, Docker
+**Requirements:** Python 3.14 and Docker.
 
 ```bash
 git clone https://github.com/goutham-226/SentryKey.git
 cd SentryKey
 
 docker compose up -d
-cp .env.example .env          # set the variables listed below
+cp .env.example .env          # fill in the variables below
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-alembic upgrade head          # schema, plus the subscription tiers
-python -m scripts.model_seed  # the model catalog (safe to re-run)
+alembic upgrade head          # tables + subscription tiers
+python -m scripts.model_seed  # model catalog (safe to re-run)
 
 uvicorn app.main:app --reload
 ```
@@ -242,27 +246,24 @@ uvicorn app.main:app --reload
 | :--- | :--- |
 | `DATABASE_URL` | With the bundled Compose file: `postgresql+asyncpg://kq:kq@localhost:5432/kqpostgres` |
 | `OPENAI_API_KEY` | OpenAI models |
-| `ANTHROPIC_API_KEY` | Claude models, and Claude prompt counting via `count_tokens` |
+| `ANTHROPIC_API_KEY` | Claude models and Claude prompt counting |
 | `ANTHROPIC_SYSTEM_PROMPT` | System prompt sent with every Claude request |
 | `REPLICATE_API_TOKEN` | Only the `scripts/provider_test.py` smoke test |
 
-All five are required at startup. The settings object refuses to load if any is missing,
-including `REPLICATE_API_TOKEN`.
+All five are required. The app won't start if any is missing, including
+`REPLICATE_API_TOKEN`.
 
-Interactive documentation is served at **http://127.0.0.1:8000/docs**, generated from the
-route signatures and Pydantic models, so it never drifts from the code.
+Interactive docs are at **http://127.0.0.1:8000/docs**, generated from the code.
 
 ```bash
 curl http://127.0.0.1:8000/health
 # {"status":"ok"}
 ```
 
-### Running the tests
+### Tests
 
-The suite runs against a separate `sk_test` database in the same Postgres container, so
-development data is never touched. Migrations and the model catalog are applied once per
-run; every test starts from empty user, key, subscription, conversation, message and usage
-tables. Tests never call a real provider.
+Tests use a separate `sk_test` database in the same container, so your dev data is safe.
+Each test starts with empty tables, and no test calls a real provider.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -271,9 +272,8 @@ docker exec -it kq-postgres createdb -U kq sk_test   # first time only
 pytest -v
 ```
 
-The same suite runs in CI on every push and pull request to `main`, against a fresh
-Postgres service, after a flake8 pass that fails the build on syntax errors and undefined
-names.
+CI runs the same suite on every push and pull request to `main`. A flake8 pass runs first
+and fails the build on syntax errors or undefined names.
 
 ### Pre-commit hooks
 
@@ -282,34 +282,43 @@ pip install pre-commit
 pre-commit install
 ```
 
-Every commit then runs YAML validation, a large-file check, private-key detection,
-`ruff check --fix`, and the full pytest suite.
+Each commit then runs YAML checks, a large-file check, private-key detection,
+`ruff check --fix` and the full test suite.
 
 ## API
 
 | | Method | Path | Description |
 | :---: | :--- | :--- | :--- |
-| 🔓 | `GET` | `/health` | Liveness probe. Unversioned — infrastructure, not API surface. |
-| 🔓 | `POST` | `/v1/auth/register` | Create an account. Password must be 8–27 characters, name 1–100. `409` on a duplicate email, `422` on invalid input. |
-| 🔓 | `GET` | `/v1/models-catalog` | The public catalog: every model's id, provider and the plan it needs. |
-| 🔑 | `POST` | `/v1/keys` | Issue an API key. Email and password go in the JSON body. The raw value is returned **once**, along with its `key_id`. `401` on bad credentials. |
-| 🔑 | `GET` | `/v1/keys` | List the caller's active keys by prefix, with `key_id` and quota. Revoked keys are hidden. `404` if the caller has no active keys. |
-| 🔑 | `DELETE` | `/v1/keys/{key_id}` | Revoke one of the caller's keys. The row is kept (`revoked_on` is set) so usage history survives, and the key is rejected with `401` from then on. `404` if the key doesn't exist or belongs to someone else. |
-| 🔑 | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if a subscription is already active. |
-| 🔐 | `POST` | `/v1/chat/completions` | Run a prompt against a model in the caller's tier, optionally continuing a conversation. `403` without an active subscription or for a model outside the tier. `404` for an unknown model, a model whose provider isn't wired up yet (Google), or a `conversation_id` that doesn't exist or belongs to a different key. `422` if `max_tokens` isn't positive. `429` once the daily budget is spent. |
-| 🔐 | `GET` | `/v1/chat-history/{conversation_id}` | Full message log for a conversation owned by the caller's key. `404` if the conversation doesn't exist or belongs to a different key. |
+| 🔓 | `GET` | `/health` | Liveness check. |
+| 🔓 | `POST` | `/v1/auth/register` | Create an account. Password 8–27 characters, name 1–100. `409` if the email exists, `422` on bad input. |
+| 🔓 | `GET` | `/v1/models-catalog` | Every model with its provider and required plan. |
+| 🔑 | `POST` | `/v1/keys` | Create an API key (email and password in the JSON body). The full key is shown **once**. `401` on bad credentials. |
+| 🔑 | `GET` | `/v1/keys` | List your active keys by prefix. `404` if you have none. |
+| 🔑 | `DELETE` | `/v1/keys/{key_id}` | Revoke a key. It returns `401` from then on. `404` if it isn't yours. |
+| 🔑 | `POST` | `/v1/subscriptions` | Subscribe to Basic, Pro or Premium for one month. `409` if you already have an active plan. |
+| 🔐 | `POST` | `/v1/chat/completions` | Send a prompt, optionally continuing a conversation. See the errors below. |
+| 🔐 | `GET` | `/v1/chat-history/{conversation_id}` | Full message log of one of your conversations. `404` if it isn't yours. |
 
 🔓 ![Public](https://img.shields.io/badge/auth-public-brightgreen) &nbsp;&middot;&nbsp; 🔑 ![Auth](https://img.shields.io/badge/auth-password-orange) &nbsp;&middot;&nbsp; 🔐 ![API Key](https://img.shields.io/badge/auth-bearer_token-blue)
 
-Two credentials, deliberately. Key management and billing require the account password,
-because an API key is a bearer credential that lives in config files and CI variables — a
-leaked key can spend quota, but it cannot mint more keys, change the plan or escalate. The
-same rule is what makes revocation work: the owner revokes a leaked or lost key with the
-password, without ever needing the key itself.
+`/v1/chat/completions` errors:
 
-### Getting from zero to a completion
+| Code | When |
+| :--- | :--- |
+| `401` | Missing, unknown or revoked key |
+| `403` | No active subscription, or the model is above your tier |
+| `404` | Unknown model, a Google model, or a `conversation_id` that isn't yours |
+| `422` | `max_tokens` isn't positive |
+| `429` | Daily token budget used up |
+| `500` | Anthropic's `count_tokens` call failed (nothing is reserved) |
 
-**1. Issue a key.**
+**Why two credentials?** API keys end up in config files and CI secrets, so they leak. A
+leaked key can spend quota, but it can't create keys, change the plan or revoke anything.
+Those need the account password. That also means you can revoke a lost key without having it.
+
+### Walkthrough
+
+**1. Create a key.**
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/keys \
@@ -325,11 +334,9 @@ curl -X POST http://127.0.0.1:8000/v1/keys \
 }
 ```
 
-That value is shown once and cannot be retrieved. Only its first eleven characters and a
-hash are stored. Keep the `key_id` — it is how the key is revoked later.
+Save the key now; it can't be shown again. Keep the `key_id` too, you need it to revoke the key.
 
-**2. Subscribe to a plan.** The period starts now and runs for one month; the database
-computes both ends.
+**2. Subscribe.** The plan starts now and lasts one month.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/subscriptions \
@@ -345,8 +352,8 @@ curl -X POST http://127.0.0.1:8000/v1/subscriptions \
 }
 ```
 
-**3. Send a prompt.** Omit `conversation_id` to start a new conversation; send back the
-returned id to continue it, on the same model or a different one.
+**3. Send a prompt.** Leave out `conversation_id` to start a new conversation. Send the
+returned id back to continue it.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/chat/completions \
@@ -371,25 +378,23 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 }
 ```
 
-`max_tokens` is clamped to the remaining daily budget, under the reservation lock, before
-the request reaches the provider. The prompt is counted at that point (`tiktoken` for
-OpenAI, `count_tokens` for Claude), so neither a single call nor several concurrent ones can
-overrun the quota.
+`max_tokens` is lowered to fit your remaining budget before the request is sent, so you can't
+overspend, even with parallel requests.
 
-The same request works for Claude: set `"model"` to `claude-haiku-4-5` (Basic),
-`claude-sonnet-5` (Pro) or `claude-opus-5` (Premium).
+For Claude, use `claude-haiku-4-5` (Basic), `claude-sonnet-5` (Pro) or `claude-opus-5`
+(Premium).
 
-The HTTP status is `200` whenever the provider was reached. How the stream ended is
-recorded in the usage record's `status` and `status_code`:
+The HTTP status is `200` whenever the provider was reached. How the call actually ended is
+stored in the usage record:
 
 | Status | Meaning | Billed |
 | :--- | :--- | :--- |
-| `Completed` | The stream finished normally. | Real usage reported by the provider |
-| `Interrupted` | The stream broke after tokens had started arriving. `output` holds what was generated. | Tokens received + 15-token buffer |
-| `Refused` | Claude declined the request (`stop_reason: "refusal"`). Recorded with status code `403`. | Real usage reported by Anthropic |
-| `Failed` | The provider failed before the first token, or the request raised before settling. `output` is a "model not available" message, and no messages are saved. | Nothing, the reservation is released |
+| `Completed` | Finished normally. | Provider's reported usage |
+| `Interrupted` | Broke mid-stream. `output` has what was generated. | Tokens received + 15 |
+| `Refused` | Claude declined (`stop_reason: "refusal"`). Status code `403`. | Anthropic's reported usage |
+| `Failed` | Failed before the first token. `output` is a "model not available" message; no messages saved. | Nothing |
 
-**4. Pull the conversation back.**
+**4. Read the conversation.**
 
 ```bash
 curl http://127.0.0.1:8000/v1/chat-history/1 \
@@ -415,16 +420,13 @@ curl http://127.0.0.1:8000/v1/chat-history/1 \
 ]
 ```
 
-Scoped to the bearer key that owns the conversation — a `404` either way if it doesn't
-exist or belongs to someone else, so the endpoint never confirms another key's conversation
-ids exist.
+You get `404` both for conversations that don't exist and ones owned by another key, so
+nobody can probe for other people's ids.
 
-**5. Switch models mid-conversation.** Send the same `conversation_id` with a different
-`model`, even one from another provider. The conversation carries on, and the new model
-receives the earlier turns as context.
+**5. Switch models.** Send the same `conversation_id` with a different `model`, even from
+another provider. The new model gets the earlier turns as context.
 
-Entitlement is checked on every request against the model named in that request, not the one
-the conversation started on. Asha is on Basic, so carrying the GPT conversation over to
+Your plan is checked against the model in *this* request. Asha is on Basic, so moving to
 `claude-sonnet-5` (Pro) is refused:
 
 ```bash
@@ -445,14 +447,13 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 }
 ```
 
-| Tier    | OpenAI models available                        | Anthropic models available                              |
+| Tier    | OpenAI models                                  | Anthropic models                                        |
 |---------|------------------------------------------------|---------------------------------------------------------|
 | Basic   | `gpt-5.6-luna`                                 | `claude-haiku-4-5`                                      |
 | Pro     | `gpt-5.6-luna`, `gpt-5.6-terra`                | `claude-haiku-4-5`, `claude-sonnet-5`                   |
 | Premium | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol` | `claude-haiku-4-5`, `claude-sonnet-5`, `claude-opus-5`  |
 
-On a Pro subscription, the same request goes through: Claude receives the GPT turns as
-context, and its reply is added to conversation `1`:
+On Pro, the same request works. Claude sees the GPT turns and its reply joins conversation `1`:
 
 ```json
 {
@@ -466,27 +467,18 @@ context, and its reply is added to conversation `1`:
 }
 ```
 
-How the history is carried over (short-term memory):
+How the history carries over:
 
-- Before anything is reserved, the gateway checks that `conversation_id` belongs to the
-  caller's key and returns `404` if it doesn't. Omitting it (or sending `0`) starts a new
-  conversation.
-- It takes the conversation's **last 8 messages** (4 user + 4 assistant) and walks them newest
-  to oldest, keeping whole messages while they fit the key's remaining daily context quota
-  (100,000 tokens per rolling 24 hours). The first message that doesn't fit is dropped with
-  everything older than it, and a leading assistant message is removed so the history starts
-  on a user turn. The kept messages are sent oldest to newest, followed by the new prompt.
-- Anything older than those 8 messages is still stored and returned by `/v1/chat-history`,
-  but the model doesn't see it. Recalling relevant older details is what the planned
-  [long-term memory](#roadmap-long-term-memory) is for.
-- Messages are sent as plain `role` + `content`, and the model that produced each one isn't
-  passed along. The new model sees the earlier assistant turns as if it had written them itself.
-- History is billed to the context quota, not the token quota. The provider's reported prompt
-  count includes the history, so the gateway subtracts the history tokens before recording
-  `prompt_tokens`. That's why the figure above is only the new prompt, and why continuing a
-  conversation costs the same daily token quota as starting one.
-- Every message stores the model that produced it, so `/v1/chat-history/1` shows where the
-  conversation moved from OpenAI to Anthropic:
+- The `conversation_id` must belong to your key, or you get `404` before anything is
+  reserved. Leaving it out (or sending `0`) starts a new conversation.
+- Up to the last 8 messages are sent, trimmed to your context quota as described in
+  [Short-term memory](#short-term-memory). Older messages are kept but not sent.
+- Messages are sent as plain `role` + `content`. The new model sees earlier replies as if
+  it wrote them.
+- History counts against the context quota, not the token quota. That's why `prompt_tokens`
+  above covers only the new prompt.
+
+The history endpoint shows which model wrote each message:
 
 ```json
 [
@@ -497,7 +489,7 @@ How the history is carried over (short-term memory):
 ]
 ```
 
-**6. Revoke a key.** Use the `key_id` from step 1, or look it up with `GET /v1/keys`.
+**6. Revoke a key.** Use the `key_id` from step 1, or find it with `GET /v1/keys`.
 
 ```bash
 curl -X DELETE http://127.0.0.1:8000/v1/keys/1 \
@@ -508,8 +500,8 @@ curl -X DELETE http://127.0.0.1:8000/v1/keys/1 \
 { "status": "success" }
 ```
 
-From here on, any request made with that key is rejected with `401`, and it no longer
-appears in `GET /v1/keys`. Its conversations and usage records are kept.
+The key now gets `401` and disappears from `GET /v1/keys`. Its conversations and usage
+records are kept.
 
 ## Data model
 
@@ -521,174 +513,187 @@ subscription_tiers ──< users ──< api_keys ──< conversations ──< 
                              models ────────────┘
 ```
 
-Eight tables. `subscription_tiers` and `models` are catalog data — a model launch, a price
-change or an emergency deactivation is an `UPDATE`, never a deploy. Each model row carries
-its provider, minimum tier, context window, the name of the provider's max-tokens parameter,
-and input/output prices per million tokens. `subscriptions` records what a user bought and
-for how long, and is the sole source of truth for entitlement. `usage_records` is the ledger
-every quota decision and every cost report derives from: prompt, completion and context
-tokens, plus the upstream status of each call.
+| Table | Holds |
+| :--- | :--- |
+| `subscription_tiers` | Basic, Pro, Premium and their ranks |
+| `models` | Provider, minimum tier, context window, max-tokens parameter name, prices per 1M tokens |
+| `users` | Accounts |
+| `subscriptions` | What a user bought and for how long; the only source of entitlement |
+| `api_keys` | Hashed keys, prefixes, quotas, revocation date |
+| `conversations` | One per chat thread, owned by a key |
+| `messages` | Every turn, with its role, model and token count |
+| `usage_records` | The ledger: prompt, completion and context tokens plus the outcome of each call |
 
-Cascades differ per relationship, deliberately: keys and conversations cascade from their
-owner, usage records keep their row when a conversation is deleted, and a retired model
-never rewrites history. API keys are revoked with a timestamp rather than deleted, so the
-cascade from a key never fires in normal use.
+Deletes cascade differently on purpose:
+
+- Keys and conversations are deleted with their owner.
+- Usage records survive when their conversation or model is deleted.
+- Keys are revoked rather than deleted, so their cascade never fires in normal use.
 
 ## Project layout
 
 ```
 .
 ├── .github/workflows/
-│   └── python-app.yml           CI — flake8 + pytest against a Postgres service on every push/PR to main
+│   └── python-app.yml           CI: flake8 + pytest against Postgres on every push/PR to main
 ├── app/
 │   ├── main.py                  Routes
 │   ├── config.py                Settings from the environment
 │   ├── db.py                    Async engine, session factory, get_db
-│   ├── deps.py                  Auth dependencies — password, API key, and API key + tier entitlement
+│   ├── deps.py                  Auth dependencies: password, API key, API key + tier check
 │   ├── security.py              Password hashing (bcrypt)
-│   ├── models.py                SQLAlchemy ORM — the database schema
-│   ├── schemas.py               Pydantic — the API contract
+│   ├── models.py                SQLAlchemy models (the database schema)
+│   ├── schemas.py               Pydantic models (the API contract)
 │   └── services/
-│       ├── provider_service.py  get_response orchestration — ownership check, quota reservation (row lock),
-│       │                        short-term memory, provider routing, settle / release of the reservation
-│       ├── open_ai.py           OpenAI streaming client, tiktoken counting, billable vs non-billable error handling
-│       ├── anthropic_ai.py      Anthropic streaming client, count_tokens counting, refusal handling,
-│       │                        billable vs non-billable error handling
-│       └── provider_data.py     provider_response dataclass — the one result shape every provider returns
+│       ├── provider_service.py  Request flow: ownership, reservation, short-term memory,
+│       │                        provider routing, settle and release
+│       ├── open_ai.py           OpenAI streaming, tiktoken counting, error handling
+│       ├── anthropic_ai.py      Anthropic streaming, count_tokens, refusals, error handling
+│       └── provider_data.py     provider_response, the shared result type
 ├── tests/
-│   ├── __init__.py              Marks tests as a package
-│   ├── conftest.py              Fixtures — test DB override, migrations + model seeding, per-test cleanup, async client, user / key / subscription fixtures
-│   ├── test_health.py           Smoke test for GET /health
+│   ├── conftest.py              Test DB setup, cleanup, client and user/key/subscription fixtures
+│   ├── test_health.py           GET /health
 │   ├── test_auth.py             POST /v1/auth/register
-│   ├── test_keys.py             POST, GET and DELETE /v1/keys — issuing, listing and revoking keys
+│   ├── test_keys.py             Creating, listing and revoking keys
 │   ├── test_subscriptions.py    POST /v1/subscriptions
-│   ├── test_catalog.py          GET /v1/models-catalog — every seeded model with its provider and tier
-│   ├── test_chat_history.py     GET /v1/chat-history — format, ordering, and 404 for missing or foreign conversations
-│   ├── test_deps.py             Auth and entitlement dependencies — missing, unknown and revoked keys, unsubscribed users, tier gating
-│   ├── test_security.py         Unit tests for password hashing
-│   └── test_schemas.py          Unit tests for Pydantic request/response validation
-├── alembic/versions/            One reversible revision per schema change
+│   ├── test_catalog.py          GET /v1/models-catalog
+│   ├── test_chat_history.py     GET /v1/chat-history: format, order, 404s
+│   ├── test_deps.py             Auth and tier checks: bad/revoked keys, no plan, wrong tier
+│   ├── test_security.py         Password hashing
+│   └── test_schemas.py          Request/response validation
+├── alembic/versions/            One reversible migration per schema change
 ├── scripts/
-│   ├── model_seed.py            Model catalog seeding (idempotent — safe to re-run)
+│   ├── model_seed.py            Seeds the model catalog (safe to re-run)
 │   └── provider_test.py         Manual smoke test against Replicate
-├── sql/                         The original hand-written schema and reporting queries
-├── docs/                        Dev notes on provider SDKs and error-handling design
+├── sql/                         Original hand-written schema and reporting queries
+├── docs/                        Notes on provider SDKs and error handling
 ├── .env.example                 Required environment variables
-├── .pre-commit-config.yaml      Local hooks — YAML check, large files, private keys, ruff, pytest
+├── .pre-commit-config.yaml      Pre-commit hooks
 ├── alembic.ini                  Alembic config
-├── docker-compose.yaml          PostgreSQL 17, named volume, health check
-├── pytest.ini                   Pytest config — async mode, test paths
+├── docker-compose.yaml          PostgreSQL 17 with a health check
+├── pytest.ini                   Pytest config
 ├── requirements.txt             Runtime dependencies
-└── requirements-dev.txt         Runtime + test dependencies (pytest, pytest-asyncio, pytest-cov)
+└── requirements-dev.txt         Runtime + test dependencies
 ```
 
-Input and output schemas are kept separate throughout. A client cannot set a server-owned
-field, because no such field exists on the input model; a secret cannot leak, because the
-response model does not declare it. Both hold by construction rather than by review.
+Input and output schemas are always separate classes. A client can't set a server-owned
+field because the input model doesn't have it. A secret can't leak because the output model
+doesn't have it either.
 
 ## Roadmap: long-term memory
 
-Short-term memory only covers the last four exchanges. Anything said earlier, like a name,
-a constraint set at the start of a long thread, or a decision from yesterday's conversation,
-drops out of what the model sees even though it is still in the database. Long-term memory
-is meant to bring back the relevant parts of that older history, chosen by what the new
-prompt is about. It is **not implemented yet**. The plan:
+Short-term memory only covers the last four exchanges. Anything older, like a name mentioned
+early on or a decision from yesterday's chat, is stored but never seen by the model.
 
-1. **Embed on write.** When a turn is settled, its messages are embedded and the vectors are
-   stored alongside them. Postgres stays the only datastore, with an extension such as
-   `pgvector`, so a memory is a row with the same ownership and cascade rules as the
-   message it came from.
-2. **Search on read.** Before the provider call, the incoming prompt is embedded and a
-   nearest-neighbour search runs over the key's older messages: earlier turns of this
-   conversation that fall outside the 8-message window, and the key's previous
-   conversations. Only results above a similarity threshold are kept.
-3. **Merge into context.** The retrieved snippets go ahead of the short-term history, marked
-   as recalled context. Short-term memory keeps priority: recalled snippets only use the
-   context budget it leaves behind.
-4. **Bill it like history.** Recalled tokens count against the daily context quota, and the
-   embedding calls are recorded in the ledger, so long-term memory never bypasses the same
-   metering every other token goes through.
+Long-term memory will bring back the relevant parts. It is **not built yet**. The plan:
 
-Every search is filtered by `api_key_id`, matching how `/v1/chat-history` and conversation
-continuation are scoped, so one key can never recall another key's messages.
+1. **Embed on write.** When a turn settles, embed its messages and store the vectors in
+   Postgres (e.g. with `pgvector`), under the same ownership rules as the messages.
+2. **Search on read.** Before calling the provider, embed the new prompt and search the
+   key's older messages, in this conversation and past ones. Keep only close matches.
+3. **Add to context.** Put the matches before the short-term history, marked as recalled.
+   Short-term memory always gets the budget first.
+4. **Bill it.** Recalled tokens count against the context quota, and embedding calls go in
+   the ledger.
+
+Every search is filtered by `api_key_id`, so one key can never recall another key's messages.
 
 ## Known flaws
 
-Fixed in the provider-service refactor: the check-then-act race on concurrent requests (now
-a locked reservation), messages being written into another key's conversation (now a `404`
-before anything is reserved), the pre-call prompt estimate using a word count (now
-`tiktoken`), and the prompt being counted a second time inside each provider call (the
-count from `get_response` is now passed in).
+**Already fixed:**
 
-Fixed since: the context quota not being reserved. The history is now trimmed inside the
-locked section and its size is written into the reservation row's `context_tokens`, so the
-next request's context `SUM` already sees it. Moving the commit to the reservation also
-means a new conversation is no longer left behind when the request is refused with `429`,
-and a cancellation that lands just after settlement no longer wipes the settled row.
+- Parallel requests could overspend the quota. Now a locked reservation.
+- A request could write into another key's conversation. Now a `404` before anything is
+  reserved.
+- The prompt estimate used a word count. Now `tiktoken`.
+- The prompt was counted twice per request. Now counted once and passed down.
+- History wasn't reserved, so parallel requests could overspend the context quota. It's
+  now trimmed under the lock and stored on the reservation row.
+- A `429` left an empty conversation behind. The conversation is now committed with the
+  reservation.
+- A cancellation just after settling could wipe the settled row. Release now only touches
+  `Reserved` rows.
 
 ### A crashed worker leaves its reservation behind
 
-A reservation is released by the request's own exception handler. If the process dies
-outright between reserving and settling (`SIGKILL`, OOM, a host failure), that never runs,
-and the `Reserved` row keeps counting `prompt + max_tokens` against the key for 24 hours.
+If the process dies between reserving and settling (`SIGKILL`, out of memory, host failure),
+no cleanup runs. The `Reserved` row keeps counting against the key for 24 hours.
 
-**Fix:** a periodic job that releases `Reserved` rows older than the longest possible
-provider call.
+**Fix:** a periodic job that releases old `Reserved` rows.
 
 ### Over-reservation near the limit
 
-The full clamped `max_tokens` is reserved up front. While a long request is in flight, a
-concurrent request on the same key sees that whole amount as spent, and can be clamped
-lower or refused with `429` even though the first request will probably use less. The
-budget comes back as soon as the first request settles.
+The full `max_tokens` is reserved up front. While a long request runs, a parallel request
+on the same key sees all of it as spent and may be limited or refused. The budget comes back
+once the first request settles.
 
 ### Empty conversations on failed first turns
 
-A new conversation is committed together with the reservation, before the provider call.
-If that call fails before
-generating anything, the request settles normally with nothing billed and no messages saved,
-but the empty conversation stays. Conversations are only deleted when the request raises.
+A new conversation is committed before the provider call. If the call then fails without
+generating anything, nothing is billed and no messages are saved, but the empty conversation
+stays. Conversations are only deleted when the request raises an exception.
 
 ### No index on the usage ledger
 
-Every chat request runs two `SUM`s over `usage_records`, one for tokens and one for context,
-filtered by `api_key_id` and the last 24 hours. No migration creates an index on
-`(api_key_id, requested_at)`, so each check scans more rows as the table grows. Both `SUM`s
-run while the key's row lock is held, so a slow `SUM` also lengthens how long concurrent
-requests on that key wait.
+Each chat request runs two `SUM`s over `usage_records` by `api_key_id` and time. There's no
+index on `(api_key_id, requested_at)`, so these get slower as the table grows. They run while
+the key's row is locked, so slow `SUM`s also make parallel requests wait longer.
 
-**Fix:** add a composite index on `(api_key_id, requested_at)` in a new Alembic revision.
-At higher scale, an atomic counter in Redis could take the `SUM` off the hot path entirely,
-with the ledger kept as the source of truth.
+**Fix:** add that composite index in a migration. At larger scale, a Redis counter could
+replace the `SUM`, with the ledger as the source of truth.
 
 ### An empty Claude reply breaks the conversation
 
-Claude Opus 5 and Sonnet 5 think by default, and thinking tokens count toward `max_tokens`.
-With a small `max_tokens`, thinking can use the whole budget and the reply has no text. The
-request still settles as `Completed`, and an assistant message with empty content is saved.
-Anthropic rejects history that contains an empty assistant message, so every later Claude
-request in that conversation fails with `400`. The gateway also doesn't check
-`stop_reason: "max_tokens"`, so a truncated reply is reported as `Completed`.
+Claude Opus 5 and Sonnet 5 think by default, and thinking counts toward `max_tokens`. With a
+small `max_tokens`, the reply can end up with no text. It still settles as `Completed` and an
+empty assistant message is saved.
 
-**Fix:** don't save an empty assistant message, skip empty messages in
-`trim_message_history`, and record `max_tokens` stops with their own status.
+Anthropic rejects history containing an empty assistant message, so every later Claude
+request in that conversation fails with `400`. Also, `stop_reason: "max_tokens"` isn't
+checked, so cut-off replies are reported as `Completed`.
+
+**Fix:** don't save empty messages, skip them when building history, and give `max_tokens`
+stops their own status.
 
 ### `max_tokens` isn't capped per model
 
-`max_tokens` is clamped to the caller's remaining quota but not to the model's output limit.
-Claude Haiku 4.5 accepts at most 64K output tokens, so a larger request is rejected by
-Anthropic with `400`. It settles as `Failed` and nothing is billed, but the caller only sees
-the generic "model not available" message.
+`max_tokens` is capped by your remaining quota, not by the model's output limit. Claude
+Haiku 4.5 allows at most 64K output tokens, so a larger request gets `400` from Anthropic.
+It settles as `Failed` with nothing billed, but you only see a generic "model not available"
+message.
 
-**Fix:** store each model's output limit in the `models` table and clamp to it.
+**Fix:** store each model's output limit in `models` and cap to it.
 
 ### `is_active` is not enforced
 
-Models have an `is_active` flag meant for pulling a model during an incident or after a provider deprecates it. Neither `/v1/models-catalog` nor `/v1/chat/completions` checks it, so a deactivated model is still listed and still callable.
+Models have an `is_active` flag for pulling a model. Neither the catalog nor chat
+completions checks it, so a deactivated model is still listed and usable.
 
-**Fix:** filter the catalog on `is_active`, and have the entitlement dependency reject inactive models, for example with `404` or `410 Gone`.
+**Fix:** filter the catalog by `is_active`, and reject inactive models in the entitlement
+check (`404` or `410 Gone`).
 
+### Stored message token counts are approximate
+
+Saved messages keep a `token_count`, which is used to trim and bill history. Two problems:
+
+- Claude user messages include the system prompt in their count, so each is over-counted
+  by the size of `ANTHROPIC_SYSTEM_PROMPT`.
+- Counts come from the tokenizer of the model that wrote the message. After switching
+  between GPT and Claude, history is billed with the old model's counts. The prompt is never
+  billed below its own size, but the prompt/context split can be off.
+
+**Fix:** track the system prompt's size separately, and recount history with the new
+model's tokenizer when the model changes.
+
+### The chat path has no tests
+
+Tests cover registration, keys, subscriptions, the catalog, chat history, auth checks,
+password hashing and schemas. Nothing tests `POST /v1/chat/completions` or `app/services/`.
+Reservations, history trimming and provider error handling are only tested by hand.
+
+**Fix:** tests with mocked provider clients, covering each status, cancellation, parallel
+requests on one key, and trimming at the context limit.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
