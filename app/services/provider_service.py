@@ -168,7 +168,11 @@ async def trim_message_history(history: Sequence[Messages], api_key: ApiKeys, db
     while kept_messages and kept_messages[0].role == 'assistant':
         total_tokens_requested -= kept_messages.pop(0).token_count
 
-    trimmed_history: list[dict[str,str]] = [{'role': message.role, 'content': message.content} for message in kept_messages]
+    trimmed_history: list[dict[str,str]] = []
+    for message in kept_messages:
+        if message.content != '':
+            trimmed_history.append({'role':message.role,'content':message.content})
+
     return trimmed_history, total_tokens_requested
 
 

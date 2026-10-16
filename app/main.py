@@ -126,6 +126,9 @@ async def get_keys(user: Users = Depends(get_current_user), db: AsyncSession = D
 @app.post('/v1/subscriptions',response_model=UserSubscribe,status_code=status.HTTP_201_CREATED)
 async def subscribtions(payload: SubscribeCatalog,user: Users = Depends(get_current_user),db: AsyncSession = Depends(get_db)):
     #401 is already raised if credentials are wrong by get_current_user
+    # lock the user row to prevent race conditions when checking for existing subscriptions and creating a new one.
+    stmt = select(Users).where(Users.id == user.id).with_for_update()
+    result = await db.execute(stmt)
     tier_name = payload.tier
     stmt = select(SubscriptionTiers).where(SubscriptionTiers.name == tier_name)
     result = await db.execute(stmt)
