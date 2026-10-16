@@ -57,6 +57,7 @@ async def get_gemini_response(payload: ChatRequest, context: list[dict[str,str]]
     started_generation: bool = False
     billable: bool = False
     token_buffer: int = 0
+    response_tokens: int = 0
 
     # declared ahead of the try block so except clauses can read whatever was
     # streamed before the failure.
@@ -72,6 +73,14 @@ async def get_gemini_response(payload: ChatRequest, context: list[dict[str,str]]
         if usage is None:
             return 0
         return (usage.candidates_token_count or 0) + (usage.thoughts_token_count or 0)
+
+    def visible_tokens() -> int:
+        """
+        Answer tokens from the last reported usage -> excludes thinking tokens, which are never resent as context.
+        """
+        if usage is None:
+            return 0
+        return usage.candidates_token_count or 0
 
     def non_billable_failure(fallback_status_code: int) -> None:
         """
@@ -94,12 +103,13 @@ async def get_gemini_response(payload: ChatRequest, context: list[dict[str,str]]
         billable only if Gemini had already generated (and therefore billed
         for) some completion tokens before the failure.
         """
-        nonlocal model_response, completion_tokens, status_code, status, billable, token_buffer
+        nonlocal model_response, completion_tokens, status_code, status, billable, token_buffer, response_tokens
         if started_generation:
             model_response = ''.join(parts)
             # usage may lag behind the text already streamed (or never arrive)
             # -> estimate ~4 chars per token, floored at the last reported usage.
             completion_tokens = max(output_tokens(), len(model_response) // 4)
+            response_tokens = max(visible_tokens(), len(model_response) // 4)
             token_buffer = 15 # safety buffer for an interrupted/uncounted completion.
             status_code = fallback_status_code
             status = 'Interrupted'
@@ -135,6 +145,8 @@ async def get_gemini_response(payload: ChatRequest, context: list[dict[str,str]]
             # floor at the count_tokens prompt estimate in case context_tokens over-counts.
             prompt_tokens = max(usage.prompt_token_count - context_tokens, prompt_tokens)
         completion_tokens = output_tokens()
+        # no usage -> estimate ~4 chars per token from the answer text.
+        response_tokens = visible_tokens() if usage is not None else len(model_response) // 4
         billable = True
         if block_reason in REFUSAL_REASONS or finish_reason in REFUSAL_REASONS:
             # refusals are still billed -> the prompt was processed (and charged for).
@@ -182,6 +194,7 @@ async def get_gemini_response(payload: ChatRequest, context: list[dict[str,str]]
                 status=status,
                 started_generation=started_generation,
                 billable=billable,
+                response_tokens=response_tokens,
                 token_buffer=token_buffer,
               )
 
@@ -204,6 +217,7 @@ async def get_replicate_response(payload: ChatRequest, context: list[dict[str,st
     started_generation: bool = False
     billable: bool = False
     token_buffer: int = 0
+    response_tokens: int = 0
 
     # declared ahead of the try block so except clauses can read whatever was
     # streamed before the failure.
@@ -231,11 +245,12 @@ async def get_replicate_response(payload: ChatRequest, context: list[dict[str,st
         billable only if Replicate had already streamed (and therefore billed
         for) some completion tokens before the failure.
         """
-        nonlocal model_response, completion_tokens, status_code, status, billable, token_buffer
+        nonlocal model_response, completion_tokens, status_code, status, billable, token_buffer, response_tokens
         if started_generation:
             model_response = ''.join(parts)
             # no usage until the prediction finishes -> estimate ~4 chars per token.
             completion_tokens = len(model_response) // 4
+            response_tokens = completion_tokens
             token_buffer = 15 # safety buffer for an interrupted/uncounted completion.
             status_code = fallback_status_code
             status = 'Interrupted'
@@ -290,6 +305,8 @@ async def get_replicate_response(payload: ChatRequest, context: list[dict[str,st
                 # metrics missing -> estimate ~4 chars per token with the safety buffer.
                 completion_tokens = len(model_response) // 4
                 token_buffer = 15
+            # replicate metrics have no reasoning breakdown -> use the output count as the visible count.
+            response_tokens = completion_tokens
             billable = True
             status_code = 200
             status = 'Completed'
@@ -336,6 +353,7 @@ async def get_replicate_response(payload: ChatRequest, context: list[dict[str,st
                 status=status,
                 started_generation=started_generation,
                 billable=billable,
+                response_tokens=response_tokens,
                 token_buffer=token_buffer,
               )
 

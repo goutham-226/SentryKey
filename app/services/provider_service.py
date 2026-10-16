@@ -207,7 +207,8 @@ async def update_usage_history(payload: ChatRequest, api_key: ApiKeys, model_res
                                   role = 'assistant',
                                   model = payload.model,
                                   content = model_response.response,
-                                  token_count = model_response.completion_tokens,
+                                  # visible tokens only -> reasoning tokens are never resent as context.
+                                  token_count = model_response.response_tokens,
                                  )
 
         db.add(assistant_message)

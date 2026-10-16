@@ -20,4 +20,5 @@ class provider_response:
     status: str
     started_generation: bool
     billable: bool
+    response_tokens: int # visible answer tokens only (no reasoning) -> stored as the assistant message's context cost.
     token_buffer: int = 0 # billed in UsageRecords on top of completion_tokens, not shown to the caller.

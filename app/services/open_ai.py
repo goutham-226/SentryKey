@@ -47,6 +47,7 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
     started_generation: bool = False
     billable: bool = False
     token_buffer: int = 0
+    response_tokens: int = 0
     # declared ahead of the try block so except clauses can read whatever was
     # streamed before the failure.
     token_counter: int = 0
@@ -60,10 +61,12 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
         for) some completion tokens before the failure.
         """
         nonlocal model_response, prompt_tokens, completion_tokens, context_tokens
-        nonlocal status_code, status, billable, token_buffer
+        nonlocal status_code, status, billable, token_buffer, response_tokens
         if started_generation:
             model_response = ''.join(parts)
             completion_tokens = token_counter
+            # token_counter only counts streamed text -> already visible-only.
+            response_tokens = token_counter
             token_buffer = 15 # safety buffer for an interrupted/uncounted completion.
             status_code = fallback_status_code
             status = 'Interrupted'
@@ -120,8 +123,13 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
             # floor at the tiktoken prompt estimate in case context_tokens over-counts.
             prompt_tokens = max(usage.prompt_tokens - context_tokens, prompt_tokens)
             completion_tokens = usage.completion_tokens
+            # completion_tokens includes reasoning tokens -> subtract them for the visible count.
+            details = usage.completion_tokens_details
+            reasoning_tokens = (details.reasoning_tokens or 0) if details else 0
+            response_tokens = completion_tokens - reasoning_tokens
         else:
             completion_tokens = token_counter
+            response_tokens = token_counter
         status_code = 200
         status = 'Completed'
         billable = True
@@ -166,6 +174,7 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
                 status=status,
                 started_generation=started_generation,
                 billable=billable,
+                response_tokens=response_tokens,
                 token_buffer=token_buffer,
               )
 

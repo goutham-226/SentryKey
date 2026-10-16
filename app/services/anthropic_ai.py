@@ -52,12 +52,14 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
     started_generation: bool = False
     billable: bool = False
     token_buffer: int = 0
+    response_tokens: int = 0
 
     # declared ahead of the try block so except clauses can read whatever was
     # streamed before the failure.
     parts: list[str] = []
     input_tokens: int | None = None # message_start usage -> system prompt + context + prompt.
     output_tokens: int = 0 # message_delta usage -> cumulative completion tokens.
+    thinking_tokens: int = 0 # message_delta usage -> reasoning tokens included in output_tokens.
     stop_reason: str | None = None
 
     def mid_stream_failure(fallback_status_code: int) -> None:
@@ -67,7 +69,7 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
         for) some completion tokens before the failure.
         """
         nonlocal model_response, prompt_tokens, completion_tokens, context_tokens
-        nonlocal status_code, status, billable, token_buffer
+        nonlocal status_code, status, billable, token_buffer, response_tokens
         if not fallback_status_code >= 400:
             fallback_status_code = 500
         if started_generation:
@@ -75,6 +77,7 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
             # no local tokenizer for anthropic and output usage only arrives at the end
             # of the stream -> estimate ~4 chars per token, floored at the last reported usage.
             completion_tokens = max(output_tokens, len(model_response) // 4)
+            response_tokens = max(output_tokens - thinking_tokens, len(model_response) // 4)
             token_buffer = 15 # safety buffer for an interrupted/uncounted completion.
             status_code = fallback_status_code
             status = 'Interrupted'
@@ -121,6 +124,8 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
                 elif event.type == 'message_delta':
                     stop_reason = event.delta.stop_reason
                     output_tokens = event.usage.output_tokens
+                    details = event.usage.output_tokens_details
+                    thinking_tokens = details.thinking_tokens if details else 0
                 # an SSE 'error' event (e.g. overloaded mid-stream) is raised by the SDK
                 # as an APIStatusError -> handled by the except clauses below.
 
@@ -130,6 +135,8 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
             # floor at the count_tokens prompt estimate in case context_tokens over-counts.
             prompt_tokens = max(input_tokens - context_tokens, prompt_tokens)
         completion_tokens = output_tokens
+        # output_tokens includes thinking tokens -> subtract them for the visible count.
+        response_tokens = output_tokens - thinking_tokens
         billable = True
         if stop_reason == 'refusal':
             # refusals are still billed -> anthropic generated (and charged for) the tokens.
@@ -188,6 +195,7 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
                 status=status,
                 started_generation=started_generation,
                 billable=billable,
+                response_tokens=response_tokens,
                 token_buffer=token_buffer,
               )
 
