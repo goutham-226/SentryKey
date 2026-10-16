@@ -6,6 +6,14 @@
 
 One endpoint for nine AI models from three providers. It tracks daily token usage, manages API keys, and keeps your conversation history even when you switch models mid-chat.
 
+> **At a glance**
+>
+> - 🔀 **One API, three providers:** OpenAI, Anthropic and Google, all streamed and all live.
+> - 🪪 **Plans gate models:** Basic, Pro and Premium. The gateway enforces it, not the client.
+> - 📊 **Metered:** 100,000 tokens per key per rolling 24 hours, tracked in a ledger.
+> - 🔒 **Safe by design:** keys are stored hashed, quota is reserved before every call, and failed calls aren't billed.
+> - 💬 **Portable chats:** start on GPT, continue on Claude or Gemini.
+
 [![CI](https://img.shields.io/github/actions/workflow/status/goutham-226/SentryKey/python-app.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/goutham-226/SentryKey/actions)
 [![Python](https://img.shields.io/badge/python-3.14-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
@@ -45,7 +53,7 @@ this, not the client.
 | :--- | :--- | :--- | ---: |
 | **Premium** | [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white)](https://openai.com/) | GPT-5.6 Sol | 1M+ |
 | | [![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white)](https://www.anthropic.com/) | Claude Opus 5 | 1M+ |
-| | [![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white)](https://gemini.google/in/about/?hl=en-IN) | Gemini 3.1 Pro | 1M+ |
+| | [![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white)](https://gemini.google/in/about/?hl=en-IN) | Gemini 3.1 Pro (via Replicate) | 1M+ |
 | **Pro** | [![OpenAI](https://img.shields.io/badge/OpenAI-412991?style=flat&logo=openai&logoColor=white)](https://openai.com/) | GPT-5.6 Terra | 200k |
 | | [![Anthropic](https://img.shields.io/badge/Anthropic-D97757?style=flat&logo=anthropic&logoColor=white)](https://www.anthropic.com/) | Claude Sonnet 5 | 1M+ |
 | | [![Google](https://img.shields.io/badge/Google-4285F4?style=flat&logo=googlegemini&logoColor=white)](https://gemini.google/in/about/?hl=en-IN) | Gemini 3.5 Flash | 1M+ |
@@ -60,9 +68,9 @@ models, not more volume.
 **Catalog in the database.** Adding a model or moving it between tiers is a
 database `UPDATE`, not a redeploy.
 
-**Provider status.** OpenAI and Anthropic work end to end, streamed through their own SDKs.
-Google models are listed and tier-gated, but return `404 Model not available at the moment.`
-until their client is built.
+**Provider status.** All three providers work end to end and stream through their own SDKs.
+Gemini 3.1 Pro is the one exception: it is served through [Replicate](https://replicate.com/)
+and billed by them. Gemini 3.5 Flash and Flash-Lite call Google directly.
 
 **Portable conversations.** History lives in the gateway, so you can start a chat on one
 model and continue it on another. Each request includes the last four exchanges as
@@ -90,16 +98,17 @@ flowchart TB
 
     OAI["OpenAI"]
     ANT["Anthropic"]
-    GEM["Google<br/>not wired yet"]
+    GEM["Google<br/>Gemini API / Replicate"]
     R[Client response]
     PG[("PostgreSQL")]
 
     C -->|Bearer key| AUTH --> ENT --> COUNT --> OWN --> CTX --> QUOTA --> PROV
     PROV -->|openai| OAI
     PROV -->|anthropic| ANT
-    PROV -.->|google| GEM
+    PROV -->|google| GEM
     OAI --> SETTLE
     ANT --> SETTLE
+    GEM --> SETTLE
     SETTLE -->|JSON| R
     PROV -.->|exception / cancellation| REL
 
@@ -193,9 +202,9 @@ differently:
 - **Finishes:** billed using the provider's reported usage. If that never arrives, the
   gateway estimates from the streamed text.
 
-The estimate is exact for OpenAI (`tiktoken`). Claude has no local tokenizer, so an
-interrupted Claude stream is billed at about 4 characters per token, and never less than
-Anthropic's last reported `output_tokens`.
+The estimate is exact for OpenAI (`tiktoken`). Claude and Gemini have no local tokenizer, so
+an interrupted stream is billed at about 4 characters per token, and never less than the
+provider's last reported output count.
 
 Each provider sorts its SDK errors into two groups:
 
@@ -216,6 +225,22 @@ adds an empty turn to the history.
   pre-call count.
 - If Claude refuses (`stop_reason: "refusal"`), the tokens are still billed, because
   Anthropic charges for them. The row is recorded as `Refused` with status code `403`.
+
+### Gemini specifics
+
+- Prompts are counted with Google's `count_tokens`, before any lock is taken.
+- Thinking tokens are billed as output, but never saved as context.
+- Blocked or refused answers (`SAFETY`, `RECITATION` and similar) are billed and recorded as
+  `Refused` with status code `403`.
+- `google/gemini-3.1-pro` runs on Replicate. It is sent history as one text prompt, and a
+  dropped request cancels the prediction so it stops billing.
+- Calls time out after 60 seconds of silence.
+
+### Reasoning tokens
+
+Claude and Gemini think before they answer. Thinking tokens are billed to the token quota like
+any output, but stored messages only count the visible answer. Thinking is never sent back as
+history.
 
 ### Migrations
 
@@ -248,10 +273,10 @@ uvicorn app.main:app --reload
 | `OPENAI_API_KEY` | OpenAI models |
 | `ANTHROPIC_API_KEY` | Claude models and Claude prompt counting |
 | `ANTHROPIC_SYSTEM_PROMPT` | System prompt sent with every Claude request |
-| `REPLICATE_API_TOKEN` | Only the `scripts/provider_test.py` smoke test |
+| `GOOGLE_API_KEY` | Gemini models and Gemini prompt counting |
+| `REPLICATE_API_TOKEN` | Gemini 3.1 Pro (served through Replicate) |
 
-All five are required. The app won't start if any is missing, including
-`REPLICATE_API_TOKEN`.
+All six are required. The app won't start if any is missing.
 
 Interactive docs are at **http://127.0.0.1:8000/docs**, generated from the code.
 
@@ -307,10 +332,10 @@ Each commit then runs YAML checks, a large-file check, private-key detection,
 | :--- | :--- |
 | `401` | Missing, unknown or revoked key |
 | `403` | No active subscription, or the model is above your tier |
-| `404` | Unknown model, a Google model, or a `conversation_id` that isn't yours |
+| `404` | Unknown or deactivated model, or a `conversation_id` that isn't yours |
 | `422` | `max_tokens` isn't positive |
 | `429` | Daily token budget used up |
-| `500` | Anthropic's `count_tokens` call failed (nothing is reserved) |
+| `500` | A provider's `count_tokens` call failed (nothing is reserved) |
 
 **Why two credentials?** API keys end up in config files and CI secrets, so they leak. A
 leaked key can spend quota, but it can't create keys, change the plan or revoke anything.
@@ -381,8 +406,13 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 `max_tokens` is lowered to fit your remaining budget before the request is sent, so you can't
 overspend, even with parallel requests.
 
-For Claude, use `claude-haiku-4-5` (Basic), `claude-sonnet-5` (Pro) or `claude-opus-5`
-(Premium).
+Model ids by tier:
+
+| Tier | OpenAI | Anthropic | Google |
+| :--- | :--- | :--- | :--- |
+| Basic | `gpt-5.6-luna` | `claude-haiku-4-5` | `gemini-3.5-flash-lite` |
+| Pro | `gpt-5.6-terra` | `claude-sonnet-5` | `gemini-3.5-flash` |
+| Premium | `gpt-5.6-sol` | `claude-opus-5` | `google/gemini-3.1-pro` |
 
 The HTTP status is `200` whenever the provider was reached. How the call actually ended is
 stored in the usage record:
@@ -391,7 +421,7 @@ stored in the usage record:
 | :--- | :--- | :--- |
 | `Completed` | Finished normally. | Provider's reported usage |
 | `Interrupted` | Broke mid-stream. `output` has what was generated. | Tokens received + 15 |
-| `Refused` | Claude declined (`stop_reason: "refusal"`). Status code `403`. | Anthropic's reported usage |
+| `Refused` | Claude or Gemini declined to answer. Status code `403`. | Provider's reported usage |
 | `Failed` | Failed before the first token. `output` is a "model not available" message; no messages saved. | Nothing |
 
 **4. Read the conversation.**
@@ -549,6 +579,7 @@ Deletes cascade differently on purpose:
 │       │                        provider routing, settle and release
 │       ├── open_ai.py           OpenAI streaming, tiktoken counting, error handling
 │       ├── anthropic_ai.py      Anthropic streaming, count_tokens, refusals, error handling
+│       ├── google_ai.py         Gemini streaming, Replicate fallback, count_tokens, refusals
 │       └── provider_data.py     provider_response, the shared result type
 ├── tests/
 │   ├── conftest.py              Test DB setup, cleanup, client and user/key/subscription fixtures
@@ -613,6 +644,13 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
   reservation.
 - A cancellation just after settling could wipe the settled row. Release now only touches
   `Reserved` rows.
+- Chat history crashed with a 500 on an unknown conversation id. It now returns `404`.
+- Reasoning tokens inflated stored message sizes and context billing. Messages now store
+  visible tokens only.
+- Deactivated models were still usable in chat. They now get `404` (the catalog still lists
+  them, see below).
+- Empty assistant messages broke later Claude requests. They are now skipped when history is
+  built.
 
 ### A crashed worker leaves its reservation behind
 
@@ -642,18 +680,14 @@ the key's row is locked, so slow `SUM`s also make parallel requests wait longer.
 **Fix:** add that composite index in a migration. At larger scale, a Redis counter could
 replace the `SUM`, with the ledger as the source of truth.
 
-### An empty Claude reply breaks the conversation
+### Thinking can eat the whole reply
 
-Claude Opus 5 and Sonnet 5 think by default, and thinking counts toward `max_tokens`. With a
-small `max_tokens`, the reply can end up with no text. It still settles as `Completed` and an
-empty assistant message is saved.
+Claude Opus 5, Sonnet 5 and Gemini think by default, and thinking counts toward `max_tokens`.
+With a small `max_tokens` the reply can come back empty or cut off. An empty message is saved
+and skipped in later history, but `stop_reason: "max_tokens"` isn't checked, so cut-off
+replies are still reported as `Completed`.
 
-Anthropic rejects history containing an empty assistant message, so every later Claude
-request in that conversation fails with `400`. Also, `stop_reason: "max_tokens"` isn't
-checked, so cut-off replies are reported as `Completed`.
-
-**Fix:** don't save empty messages, skip them when building history, and give `max_tokens`
-stops their own status.
+**Fix:** don't save empty messages, and give `max_tokens` stops their own status.
 
 ### `max_tokens` isn't capped per model
 
@@ -664,13 +698,11 @@ message.
 
 **Fix:** store each model's output limit in `models` and cap to it.
 
-### `is_active` is not enforced
+### The catalog ignores `is_active`
 
-Models have an `is_active` flag for pulling a model. Neither the catalog nor chat
-completions checks it, so a deactivated model is still listed and usable.
+Chat completions reject deactivated models, but `GET /v1/models-catalog` still lists them.
 
-**Fix:** filter the catalog by `is_active`, and reject inactive models in the entitlement
-check (`404` or `410 Gone`).
+**Fix:** filter the catalog by `is_active`.
 
 ### Stored message token counts are approximate
 
@@ -688,7 +720,8 @@ model's tokenizer when the model changes.
 ### The chat path has no tests
 
 Tests cover registration, keys, subscriptions, the catalog, chat history, auth checks,
-password hashing and schemas. Nothing tests `POST /v1/chat/completions` or `app/services/`.
+password hashing and schemas. Nothing tests `POST /v1/chat/completions` or `app/services/`
+(OpenAI, Anthropic or Google).
 Reservations, history trimming and provider error handling are only tested by hand.
 
 **Fix:** tests with mocked provider clients, covering each status, cancellation, parallel

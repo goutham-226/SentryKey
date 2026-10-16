@@ -182,7 +182,7 @@ async def get_chat_history(conversation_id: int, api_key: ApiKeys = Depends(bear
     )
     result = await db.execute(stmt)
     conversation = result.scalar_one_or_none()
-    if conversation is None and conversation.deleted_on is not None:
+    if conversation is None or conversation.deleted_on is not None:
         raise HTTPException(
             status_code=404,
             detail="No conversation found",
