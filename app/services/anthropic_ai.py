@@ -68,6 +68,8 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
         """
         nonlocal model_response, prompt_tokens, completion_tokens, context_tokens
         nonlocal status_code, status, billable, token_buffer
+        if not fallback_status_code >= 400:
+            fallback_status_code = 500
         if started_generation:
             model_response = ''.join(parts)
             # no local tokenizer for anthropic and output usage only arrives at the end
