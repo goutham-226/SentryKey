@@ -21,6 +21,7 @@ jobs:
       REPLICATE_API_TOKEN: test-replicate-token
       ANTHROPIC_API_KEY: test-anthropic-key
       ANTHROPIC_SYSTEM_PROMPT: test-system-prompt
+      GOOGLE_API_KEY: test-google-key
 
     services:
       postgres:
