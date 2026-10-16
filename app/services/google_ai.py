@@ -397,8 +397,9 @@ async def get_gemini_tokens(text: str, model: str) -> int:
     """
     Get the number of tokens in a given text using the Gemini API.
     """
-    if model == 'google/gemini-3.1-pro':
-        model = 'gemini-3.1-pro'  
+    # replicate's gemini-3.1-pro is only listed as gemini-3.1-pro-preview on the Gemini API.
+    if model == REPLICATE_GEMINI_MODEL:
+        model = 'gemini-3.1-pro-preview'
     response = await client.aio.models.count_tokens(
         model=model,
         contents=text,
