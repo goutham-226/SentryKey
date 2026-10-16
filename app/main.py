@@ -27,7 +27,6 @@ def health() -> dict[str,str]:
 
 @app.post("/v1/auth/register",response_model=UserOut,status_code=status.HTTP_201_CREATED)
 async def register(payload: UserCreate,db: AsyncSession = Depends(get_db)):
-    print(len(payload.password))
     password = hash_password(payload.password)
     user = Users(email=payload.email,name=payload.name,password_hash=password)
     db.add(user)
@@ -126,6 +125,9 @@ async def get_keys(user: Users = Depends(get_current_user), db: AsyncSession = D
 @app.post('/v1/subscriptions',response_model=UserSubscribe,status_code=status.HTTP_201_CREATED)
 async def subscribtions(payload: SubscribeCatalog,user: Users = Depends(get_current_user),db: AsyncSession = Depends(get_db)):
     #401 is already raised if credentials are wrong by get_current_user
+    # lock the user row to prevent race conditions when checking for existing subscriptions and creating a new one.
+    stmt = select(Users).where(Users.id == user.id).with_for_update()
+    result = await db.execute(stmt)
     tier_name = payload.tier
     stmt = select(SubscriptionTiers).where(SubscriptionTiers.name == tier_name)
     result = await db.execute(stmt)
@@ -180,7 +182,7 @@ async def get_chat_history(conversation_id: int, api_key: ApiKeys = Depends(bear
     )
     result = await db.execute(stmt)
     conversation = result.scalar_one_or_none()
-    if conversation is None:
+    if conversation is None and conversation.deleted_on is not None:
         raise HTTPException(
             status_code=404,
             detail="No conversation found",
@@ -190,7 +192,7 @@ async def get_chat_history(conversation_id: int, api_key: ApiKeys = Depends(bear
     ).order_by(Messages.id)
     result = await db.execute(stmt)
     message = result.scalars().all()
-    if message is None:
+    if message == []:
         raise HTTPException(
             status_code=404,
             detail="No messages found",
@@ -217,6 +219,7 @@ async def revoke_key(key_id: int,user: Users = Depends(get_current_user),db: Asy
     stmt = update(ApiKeys).where(
                ApiKeys.id == key_id,
                ApiKeys.user_id == user.id,
+               ApiKeys.revoked_on == None,
              ).values(revoked_on = func.now())
     result = await db.execute(stmt)
     if result.rowcount == 0:
