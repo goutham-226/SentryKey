@@ -7,6 +7,7 @@ processed response.
 
 #import anyio -> shield reservation release from cancellation
 import anyio
+import asyncio
 import logging
 from collections.abc import Callable, Sequence
 from datetime import timedelta
@@ -14,12 +15,13 @@ from datetime import timedelta
 from fastapi import HTTPException
 # import sqlalchemy
 from sqlalchemy import select, text, func, update, delete
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 #import AsyncSession
 from sqlalchemy.ext.asyncio import AsyncSession
 # import ChatRequest schema
 from app.schemas import ChatRequest, ChatResponse
 #import ApiKey model
-from app.models import ApiKeys, UsageRecords, Models, Conversations, Messages
+from app.models import ApiKeys, UsageRecords, Models, Conversations, Messages, MessageTokenCounts
 #import dataclass
 from app.services.provider_data import provider_response
 from app.services.open_ai import get_openai_tokens, get_openai_response
@@ -128,11 +130,71 @@ async def get_message_history(conversation_id: int, db: AsyncSession) -> Sequenc
     messages = result.scalars().all()
     return messages
 
-async def trim_message_history(history: Sequence[Messages], api_key: ApiKeys, db: AsyncSession) -> tuple[list[dict[str,str]], int]:
+async def count_text_tokens(provider: str, model: str, text: str) -> int:
+    """
+    Count a text with the given model's tokenizer.
+    """
+    if provider == 'openai':
+        return await get_openai_tokens(text=text)
+    if provider == 'anthropic':
+        # counted as a user message -> a lone assistant message is a prefill, which newer Claude models reject.
+        return await get_anthropic_tokens(text=text,model=model,role='user')
+    return await get_gemini_tokens(text=text,model=model)
+
+
+async def get_history_token_counts(history: Sequence[Messages], provider: str, model: str, db: AsyncSession) -> dict[int, int]:
+    """
+    Return message id -> token count for the last 8 messages (the most trim_message_history can send), as billed for model.
+
+    a message's token_count comes from the model that wrote it. a message written by another model
+    is recounted with this model's tokenizer once, saved in message_token_counts, and billed at
+    max(token_count, recount) -> history is never under-billed after a model switch.
+    a failed recount falls back to token_count and is not saved -> it is retried on the next request.
+
+    runs before the api_keys row lock -> count_tokens calls are network requests.
+    """
+    recent: Sequence[Messages] = history[-8:]
+    counts: dict[int, int] = {message.id: message.token_count for message in recent}
+    # same model -> token_count is already this model's count. empty messages are never sent as context.
+    other_model = [message for message in recent if message.model != model and message.content.strip()]
+    if not other_model:
+        return counts
+
+    stmt = select(MessageTokenCounts.message_id, MessageTokenCounts.token_count).where(
+                                    MessageTokenCounts.message_id.in_([message.id for message in other_model]),
+                                    MessageTokenCounts.model == model,
+                                   )
+    saved: dict[int, int] = dict((await db.execute(stmt)).all())
+
+    missing = [message for message in other_model if message.id not in saved]
+    if missing:
+        # count in parallel -> one network request per message for anthropic / google, local for openai.
+        results = await asyncio.gather(*(count_text_tokens(provider=provider,model=model,text=message.content) for message in missing), return_exceptions=True)
+        new_rows: list[dict] = []
+        for message, result in zip(missing, results):
+            if isinstance(result, Exception):
+                logger.warning('Failed to recount message %s for model=%s (%s) -> using its stored count', message.id, model, type(result).__name__)
+                continue
+            saved[message.id] = result
+            new_rows.append({'message_id': message.id, 'model': model, 'token_count': result})
+        if new_rows:
+            # do nothing on conflict -> a parallel request on the same conversation may have saved them first.
+            await db.execute(pg_insert(MessageTokenCounts).values(new_rows).on_conflict_do_nothing(index_elements=['message_id','model']))
+            # commit now -> keeps the counts even if the request is refused later.
+            # only an existing conversation has history, so nothing else is pending in this transaction.
+            await db.commit()
+
+    for message_id, recount in saved.items():
+        counts[message_id] = max(counts[message_id], recount)
+    return counts
+
+
+async def trim_message_history(history: Sequence[Messages], token_counts: dict[int, int], api_key: ApiKeys, db: AsyncSession) -> tuple[list[dict[str,str]], int]:
     """
     Check daily context quota limit for api_key.
     Get Usage Records - context tokens used for the given day.
     reconstruct message history to fit token budget.
+    token_counts -> message id -> token count for the model being called (get_history_token_counts).
     return (trimmed messages, their total token count),
     ([], 0) if context cannot fit our quota budget.
     """
@@ -162,9 +224,9 @@ async def trim_message_history(history: Sequence[Messages], api_key: ApiKeys, db
     # walk newest to oldest so the most recent messages are kept first.
     for message in reversed(_trimmed_messages):
         # if the message doesnt fit the budget drop it and every older message.
-        if total_tokens_requested + message.token_count > available_tokens:
+        if total_tokens_requested + token_counts[message.id] > available_tokens:
             break
-        total_tokens_requested += message.token_count
+        total_tokens_requested += token_counts[message.id]
         kept_messages.append(message)
 
     # back to old to new for the provider.
@@ -173,7 +235,7 @@ async def trim_message_history(history: Sequence[Messages], api_key: ApiKeys, db
     # context must start with a user message -> drop leading assistant messages
     # (odd slice parity or the budget cut off their user message).
     while kept_messages and kept_messages[0].role == 'assistant':
-        total_tokens_requested -= kept_messages.pop(0).token_count
+        total_tokens_requested -= token_counts[kept_messages.pop(0).id]
 
     trimmed_history: list[dict[str,str]] = []
     for message in kept_messages:
@@ -376,9 +438,12 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
     # get message histroy and handle context token budgeting.
     # short-term memory previous 8 messages (4-user + 4-assistant messages)
     message_history: Sequence[Messages]  = await get_message_history(conversation_id=payload.conversation_id,db=db)
-    
+
+    # history written by another model is recounted for this one (once per model) -> before the lock, it may call the provider.
+    history_token_counts: dict[int, int] = await get_history_token_counts(history=message_history,provider=_provider,model=_model,db=db)
+
     # trim messages so context tokens do'nt exceed daily limit.
-    conversation_context, context_tokens = await trim_message_history(history=message_history,api_key=api_key,db=db)
+    conversation_context, context_tokens = await trim_message_history(history=message_history,token_counts=history_token_counts,api_key=api_key,db=db)
     
 
     

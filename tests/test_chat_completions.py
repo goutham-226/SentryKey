@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
-from app.models import Conversations, Messages, Models, UsageRecords
+from app.models import Conversations, MessageTokenCounts, Messages, Models, UsageRecords
 from app.services import anthropic_ai, provider_service
 from app.services.provider_data import provider_response
 from tests.test_providers import fake_anthropic_client
@@ -267,3 +267,102 @@ async def test_claude_turn_excludes_system_prompt(send_chat, monkeypatch):
         billed = (await db.execute(select(UsageRecords.prompt_tokens))).scalar_one()
     assert user_tokens == 3
     assert billed == 3
+
+"""
+History recount after a model switch.
+
+turn 1 on gpt-5.6-luna stores user 'hi' (tiktoken: 1) and assistant 'hello there' (5, from the fake).
+then the conversation moves to claude-haiku-4-5, whose fake counter returns claude_count for every text.
+"""
+def fake_claude_counter(calls: list[str], claude_count: int, fail_on: str | None = None):
+    async def _count(text, model, role):
+        calls.append(text)
+        if text == fail_on:
+            raise RuntimeError('count_tokens failed')
+        return claude_count
+    return _count
+
+async def start_on_gpt_then_use_claude(send_chat, monkeypatch, calls: list[str], claude_count: int, fail_on: str | None = None) -> int:
+    monkeypatch.setattr(provider_service, 'get_openai_response', completed_response)
+    conversation_id = (await send_chat()).json()['conversation_id']
+
+    monkeypatch.setattr(provider_service, 'get_anthropic_tokens', fake_claude_counter(calls, claude_count, fail_on))
+    monkeypatch.setattr(provider_service, 'get_anthropic_response', completed_response)
+    response = await send_chat(conversation_id=conversation_id, model='claude-haiku-4-5')
+    assert response.status_code == 200
+    return conversation_id
+
+async def last_context_tokens() -> int:
+    async with SessionLocal() as db:
+        return (await db.execute(select(UsageRecords.context_tokens).order_by(UsageRecords.id.desc()).limit(1))).scalar_one()
+
+"""
+Test if GPT history is recounted with Claude, billed at the larger count,
+and saved -> prompt + 2 history messages are counted.
+"""
+async def test_switch_recounts_history_and_bills_larger_count(send_chat, monkeypatch):
+    calls: list[str] = []
+    await start_on_gpt_then_use_claude(send_chat, monkeypatch, calls, claude_count=10)
+
+    assert sorted(calls) == ['hello there', 'hi', 'hi']
+    # max(1, 10) + max(5, 10)
+    assert await last_context_tokens() == 20
+    async with SessionLocal() as db:
+        saved = (await db.execute(select(MessageTokenCounts.model, MessageTokenCounts.token_count))).all()
+    assert sorted(saved) == [('claude-haiku-4-5', 10), ('claude-haiku-4-5', 10)]
+
+"""
+Test if the next Claude request reuses the saved counts
+-> only the new prompt is counted.
+"""
+async def test_saved_counts_are_reused(send_chat, monkeypatch):
+    calls: list[str] = []
+    conversation_id = await start_on_gpt_then_use_claude(send_chat, monkeypatch, calls, claude_count=10)
+
+    calls.clear()
+    await send_chat(conversation_id=conversation_id, model='claude-haiku-4-5')
+
+    assert calls == ['hi']
+    # gpt messages from the saved counts (10 + 10), claude messages from their own counts (user 10, assistant 5).
+    assert await last_context_tokens() == 35
+
+"""
+Test if a recount smaller than the stored count
+bills the stored count -> history is never under-billed.
+"""
+async def test_smaller_recount_bills_stored_count(send_chat, monkeypatch):
+    await start_on_gpt_then_use_claude(send_chat, monkeypatch, [], claude_count=0)
+
+    # max(1, 0) + max(5, 0)
+    assert await last_context_tokens() == 6
+
+"""
+Test if a failed recount falls back to the stored count
+and is not saved, while the other message's recount is.
+"""
+async def test_failed_recount_uses_stored_count(send_chat, monkeypatch):
+    await start_on_gpt_then_use_claude(send_chat, monkeypatch, [], claude_count=10, fail_on='hello there')
+
+    # max(1, 10) + stored 5
+    assert await last_context_tokens() == 15
+    assert await count_rows(MessageTokenCounts) == 1
+
+"""
+Test if history from the same model is never recounted
+-> only the new prompt is counted.
+"""
+async def test_same_model_history_is_not_recounted(send_chat, monkeypatch):
+    calls: list[str] = []
+
+    async def recording_openai_tokens(text):
+        calls.append(text)
+        return 1
+    monkeypatch.setattr(provider_service, 'get_openai_tokens', recording_openai_tokens)
+    monkeypatch.setattr(provider_service, 'get_openai_response', completed_response)
+    conversation_id = (await send_chat()).json()['conversation_id']
+
+    calls.clear()
+    await send_chat(conversation_id=conversation_id)
+
+    assert calls == ['hi']
+    assert await count_rows(MessageTokenCounts) == 0

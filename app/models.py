@@ -98,6 +98,16 @@ class Messages(Base):
     created_on: Mapped[datetime ] = mapped_column(server_default=func.now())
     conversation: Mapped['Conversations'] = relationship(back_populates='message')
 
+class MessageTokenCounts(Base):
+    # a message's token_count comes from the model that wrote it -> other models tokenize it differently.
+    # one row per (message, model) that later used it as history, so it is counted once per model.
+    __tablename__ = 'message_token_counts'
+    id: Mapped[int] = mapped_column(BigInteger,primary_key=True)
+    message_id: Mapped[int] = mapped_column(BigInteger,ForeignKey('messages.id',ondelete='CASCADE'))
+    model: Mapped[str] = mapped_column(Text)
+    token_count: Mapped[int] = mapped_column(Integer)
+    __table_args__ = (UniqueConstraint('message_id','model'),)
+
 
 class Subscriptions(Base):
     __tablename__ = 'subscriptions'

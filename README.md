@@ -215,6 +215,15 @@ History is billed to the context quota, not the token quota. It's counted under 
 lock and reserved on the same row, so parallel requests can't spend it twice. Older messages
 stay in the database but aren't sent to the model.
 
+Each message's `token_count` comes from the model that wrote it, and other models tokenize the
+same text differently. So when history written by one model is sent to another, each of those
+messages is recounted with the new model's tokenizer and billed at the **larger** of the two
+counts, so a model switch never under-bills. Recounts are saved in `message_token_counts`, one
+per message per model, so each message is counted only once per model. OpenAI counts locally.
+Claude and Gemini make one `count_tokens` call per message, in parallel and before the key is
+locked, so only the first request after a switch is slower. If a recount fails, the stored
+count is used and the recount is retried next time.
+
 ### Streaming and billing
 
 A provider call can fail before, during or after generating tokens. Each case is billed
@@ -583,7 +592,7 @@ records are kept.
 ## Data model
 
 ```
-subscription_tiers ──< users ──< api_keys ──< conversations ──< messages
+subscription_tiers ──< users ──< api_keys ──< conversations ──< messages ──< message_token_counts
         │                             │              │
         └──< subscriptions            └──< usage_records >──┘
                                                 │
@@ -599,6 +608,7 @@ subscription_tiers ──< users ──< api_keys ──< conversations ──< 
 | `api_keys` | Hashed keys, prefixes, quotas, revocation date |
 | `conversations` | One per chat thread, owned by a key |
 | `messages` | Every turn, with its role, model and token count |
+| `message_token_counts` | A message's token count for each other model that used it as history |
 | `usage_records` | The ledger: prompt, completion and context tokens plus the outcome of each call |
 
 Deletes cascade differently on purpose:
@@ -639,7 +649,8 @@ Deletes cascade differently on purpose:
 │   ├── test_deps.py             Auth and tier checks: bad/revoked keys, no plan, wrong tier
 │   ├── test_reservations.py     Sweeping abandoned reservations
 │   ├── test_chat_completions.py POST /v1/chat/completions with a fake provider: conversation
-│   │                            cleanup, truncated and empty replies, max_tokens capping
+│   │                            cleanup, truncated and empty replies, max_tokens capping,
+│   │                            history recount after a model switch
 │   ├── test_usage_indexes.py    Ledger indexes exist and are used by the quota and sweep queries
 │   ├── test_providers.py        Each provider module with a fake SDK stream: Truncated vs Completed
 │   ├── test_security.py         Password hashing
@@ -719,19 +730,9 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
 - Claude prompts were billed and stored with the system prompt included, so every Claude
   user message over-counted history by the size of `ANTHROPIC_SYSTEM_PROMPT`. Claude now bills
   and stores the prompt's own count, and the system prompt is never charged.
-
-### Stored message token counts are approximate
-
-Saved messages keep a `token_count`, which is used to trim and bill history. Counts come
-from the tokenizer of the model that wrote the message. After switching between GPT and
-Claude, history is billed with the old model's counts. The prompt is never billed below its
-own size, but the prompt/context split can be off.
-
-Claude user messages saved before the system-prompt fix still include the system prompt in
-their count, so older conversations over-count history until those messages fall out of the
-last eight.
-
-**Fix:** recount history with the new model's tokenizer when the model changes.
+- After a model switch, history was billed and trimmed with the old model's token counts,
+  usually under-billing it on Claude. Messages from another model are now recounted with the
+  current model, saved once per model, and billed at the larger count.
 
 ### The chat path has no tests
 
