@@ -8,7 +8,8 @@ processed response.
 #import anyio -> shield reservation release from cancellation
 import anyio
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from datetime import timedelta
 #import fastapi HTTPException
 from fastapi import HTTPException
 # import sqlalchemy
@@ -255,6 +256,49 @@ async def release_reservation(reservation_id: int, db: AsyncSession, conversatio
         # the conversation was created by this request -> delete it.
         await db.execute(delete(Conversations).where(Conversations.id == conversation_id))
     await db.commit()
+
+
+async def release_stale_reservations(older_than: timedelta, db: AsyncSession) -> int:
+    """
+    Settle reservation rows to 0 tokens when they are still 'Reserved' after older_than.
+    A worker that dies between reserving and settling (SIGKILL, out of memory, host failure)
+    never runs release_reservation -> without this the reserved prompt + max_tokens
+    count against the daily quota for 24 hours.
+    status 'Expired' -> tells a swept row apart from a request that failed and released itself.
+    safe to run from every worker at once -> only rows still 'Reserved' are touched.
+    a live request whose row is swept still settles it -> update_usage_history overwrites the row by id.
+    returns the number of rows released.
+    """
+    stmt = update(UsageRecords).where(
+                               UsageRecords.status == 'Reserved',
+                               UsageRecords.requested_at < func.now() - older_than,
+                              ).values(
+                                     prompt_tokens = 0,
+                                     completion_tokens = 0,
+                                     context_tokens = 0,
+                                     status = 'Expired',
+                                     status_code = 500,
+                                    )
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount
+
+
+async def sweep_stale_reservations(interval_seconds: float, older_than: timedelta, session_factory: Callable[[], AsyncSession]):
+    """
+    Run release_stale_reservations every interval_seconds, forever.
+    started by the app's lifespan -> sweeps once at startup, so a restart after a crash frees quota straight away.
+    a failed sweep is logged and retried on the next pass -> it never stops the loop.
+    """
+    while True:
+        try:
+            async with session_factory() as db:
+                released = await release_stale_reservations(older_than=older_than,db=db)
+            if released:
+                logger.warning('Released %s stale reservation(s) older than %s', released, older_than)
+        except Exception:
+            logger.exception('Failed to release stale reservations')
+        await anyio.sleep(interval_seconds)
 
 
 async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession) -> ChatResponse:

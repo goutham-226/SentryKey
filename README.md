@@ -178,6 +178,13 @@ re-raised.
 
 The lock is held for a few statements only, never during the provider stream.
 
+**Abandoned reservations are swept.** If a worker dies between reserving and settling
+(`SIGKILL`, out of memory, host failure), no release runs. So every app process runs a
+background sweeper, started with the app and once a minute after that. It sets any row still
+`Reserved` after 15 minutes to 0 tokens with status `Expired`. The sweep only touches
+`Reserved` rows, so running it from several workers at once is safe. A request that outlives
+the timeout and then finishes still overwrites its row with the real usage.
+
 ### Short-term memory
 
 Conversations are a plain message log with no model attached. Context is rebuilt on every
@@ -277,6 +284,13 @@ uvicorn app.main:app --reload
 | `REPLICATE_API_TOKEN` | Gemini 3.1 Pro (served through Replicate) |
 
 All six are required. The app won't start if any is missing.
+
+Two optional variables tune the reservation sweeper:
+
+| Variable | Default | Used for |
+| :--- | :--- | :--- |
+| `RESERVATION_TIMEOUT_MINUTES` | `15` | Age after which a `Reserved` row counts as abandoned. Keep it above your longest request. |
+| `RESERVATION_SWEEP_INTERVAL_SECONDS` | `60` | How often each process sweeps |
 
 Interactive docs are at **http://127.0.0.1:8000/docs**, generated from the code.
 
@@ -423,6 +437,7 @@ stored in the usage record:
 | `Interrupted` | Broke mid-stream. `output` has what was generated. | Tokens received + 15 |
 | `Refused` | Claude or Gemini declined to answer. Status code `403`. | Provider's reported usage |
 | `Failed` | Failed before the first token. `output` is a "model not available" message; no messages saved. | Nothing |
+| `Expired` | The worker died before settling, and the sweeper released the reservation. The client never got a response. | Nothing |
 
 **4. Read the conversation.**
 
@@ -567,7 +582,7 @@ Deletes cascade differently on purpose:
 ├── .github/workflows/
 │   └── python-app.yml           CI: flake8 + pytest against Postgres on every push/PR to main
 ├── app/
-│   ├── main.py                  Routes
+│   ├── main.py                  Routes, and the lifespan that runs the reservation sweeper
 │   ├── config.py                Settings from the environment
 │   ├── db.py                    Async engine, session factory, get_db
 │   ├── deps.py                  Auth dependencies: password, API key, API key + tier check
@@ -576,7 +591,7 @@ Deletes cascade differently on purpose:
 │   ├── schemas.py               Pydantic models (the API contract)
 │   └── services/
 │       ├── provider_service.py  Request flow: ownership, reservation, short-term memory,
-│       │                        provider routing, settle and release
+│       │                        provider routing, settle, release and the stale-row sweep
 │       ├── open_ai.py           OpenAI streaming, tiktoken counting, error handling
 │       ├── anthropic_ai.py      Anthropic streaming, count_tokens, refusals, error handling
 │       ├── google_ai.py         Gemini streaming, Replicate fallback, count_tokens, refusals
@@ -590,6 +605,7 @@ Deletes cascade differently on purpose:
 │   ├── test_catalog.py          GET /v1/models-catalog
 │   ├── test_chat_history.py     GET /v1/chat-history: format, order, 404s
 │   ├── test_deps.py             Auth and tier checks: bad/revoked keys, no plan, wrong tier
+│   ├── test_reservations.py     Sweeping abandoned reservations
 │   ├── test_security.py         Password hashing
 │   └── test_schemas.py          Request/response validation
 ├── alembic/versions/            One reversible migration per schema change
@@ -651,13 +667,8 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
   them, see below).
 - Empty assistant messages broke later Claude requests. They are now skipped when history is
   built.
-
-### A crashed worker leaves its reservation behind
-
-If the process dies between reserving and settling (`SIGKILL`, out of memory, host failure),
-no cleanup runs. The `Reserved` row keeps counting against the key for 24 hours.
-
-**Fix:** a periodic job that releases old `Reserved` rows.
+- A crashed worker left its reservation counting against the key for 24 hours. A background
+  sweeper now releases `Reserved` rows older than 15 minutes.
 
 ### Over-reservation near the limit
 
@@ -720,7 +731,7 @@ model's tokenizer when the model changes.
 ### The chat path has no tests
 
 Tests cover registration, keys, subscriptions, the catalog, chat history, auth checks,
-password hashing and schemas. Nothing tests `POST /v1/chat/completions` or `app/services/`
+password hashing, schemas and the stale-reservation sweep. Nothing tests `POST /v1/chat/completions` or `app/services/`
 (OpenAI, Anthropic or Google).
 Reservations, history trimming and provider error handling are only tested by hand.
 

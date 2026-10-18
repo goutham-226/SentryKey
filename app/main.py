@@ -14,9 +14,27 @@ import hashlib
 from app.security import hash_password,verify_password
 from app.deps import get_current_user, get_bearer_key, bearer_auth
 from decimal import Decimal
-from app.services.provider_service import get_response
+from app.services.provider_service import get_response, sweep_stale_reservations
+from app.db import SessionLocal
+from contextlib import asynccontextmanager, suppress
+import asyncio
 
-app = FastAPI(title="SentryKey",version="0.1.0",docs_url=None)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # release reservations abandoned by a crashed worker -> runs in every process, the sweep is idempotent.
+    settings = get_settings()
+    sweeper = asyncio.create_task(sweep_stale_reservations(
+                                      interval_seconds=settings.reservation_sweep_interval_seconds,
+                                      older_than=timedelta(minutes=settings.reservation_timeout_minutes),
+                                      session_factory=SessionLocal,
+                                     ))
+    yield
+    sweeper.cancel()
+    with suppress(asyncio.CancelledError):
+        await sweeper
+
+app = FastAPI(title="SentryKey",version="0.1.0",docs_url=None,lifespan=lifespan)
 
 setup_swagger_ui_theme(app, docs_path="/docs")
 
