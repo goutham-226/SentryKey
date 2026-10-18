@@ -734,17 +734,7 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
   usually under-billing it on Claude. Messages from another model are now recounted with the
   current model, saved once per model, and billed at the larger count.
 
-### The chat path has no tests
 
-Tests cover registration, keys, subscriptions, the catalog, chat history, auth checks,
-password hashing, schemas, the stale-reservation sweep and the ledger indexes.
-`POST /v1/chat/completions` is tested for conversation cleanup and truncated replies, with a
-fake OpenAI response. The provider modules are tested with fake SDK streams, but only for how
-they report a `max_tokens` stop. Reservations, history trimming and provider error handling
-are only tested by hand.
-
-**Fix:** tests with mocked provider clients, covering each status, cancellation, parallel
-requests on one key, and trimming at the context limit.
 
 ## License
 
