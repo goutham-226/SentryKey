@@ -152,6 +152,11 @@ Every request writes a row to `usage_records` with the real token counts from th
 Remaining quota is a `SUM` over the last 24 hours of rows. Nothing keeps a running counter,
 so nothing can drift, and multiple servers agree without coordinating.
 
+An index on `(api_key_id, requested_at)` lets each `SUM` jump straight to one key's last 24
+hours instead of reading the whole ledger, so it stays fast as the table grows. A second,
+partial index on `requested_at` covers only `Reserved` rows, so the reservation sweeper only
+reads requests that are still in flight.
+
 ### Reserving quota
 
 A plain "check, then call" lets two parallel requests both see the same budget and overspend
@@ -617,6 +622,7 @@ Deletes cascade differently on purpose:
 │   ├── test_deps.py             Auth and tier checks: bad/revoked keys, no plan, wrong tier
 │   ├── test_reservations.py     Sweeping abandoned reservations
 │   ├── test_chat_completions.py POST /v1/chat/completions with a fake provider: conversation cleanup
+│   ├── test_usage_indexes.py    Ledger indexes exist and are used by the quota and sweep queries
 │   ├── test_security.py         Password hashing
 │   └── test_schemas.py          Request/response validation
 ├── alembic/versions/            One reversible migration per schema change
@@ -682,15 +688,8 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
   sweeper now releases `Reserved` rows older than 15 minutes.
 - A first turn that failed before generating left an empty conversation behind. It's now
   deleted when the reservation is settled, and the response returns `conversation_id: null`.
-
-### No index on the usage ledger
-
-Each chat request runs two `SUM`s over `usage_records` by `api_key_id` and time. There's no
-index on `(api_key_id, requested_at)`, so these get slower as the table grows. They run while
-the key's row is locked, so slow `SUM`s also make parallel requests wait longer.
-
-**Fix:** add that composite index in a migration. At larger scale, a Redis counter could
-replace the `SUM`, with the ledger as the source of truth.
+- The quota `SUM`s read the whole usage ledger on every request, while the key was locked.
+  An index on `(api_key_id, requested_at)` now takes them straight to one key's last 24 hours.
 
 ### Thinking can eat the whole reply
 

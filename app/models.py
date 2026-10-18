@@ -41,6 +41,12 @@ class UsageRecords(Base):
     status: Mapped[str] = mapped_column(Text)
     requested_at: Mapped[datetime] = mapped_column(server_default=func.now())
     status_code: Mapped[int] = mapped_column(SmallInteger)
+    __table_args__ = (
+        # quota SUMs read one key's last 24 hours under the api_keys row lock -> jump straight to them instead of scanning the ledger.
+        Index('ix_usage_records_api_key_id_requested_at','api_key_id','requested_at'),
+        # the reservation sweeper only looks for 'Reserved' rows -> a partial index stays as small as the requests in flight.
+        Index('ix_usage_records_reserved_requested_at','requested_at',postgresql_where=text("status = 'Reserved'")),
+    )
 
 
 class SubscriptionTiers(Base):
