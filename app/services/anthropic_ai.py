@@ -143,6 +143,10 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
             logger.warning("Anthropic refused to generate a response model=%s", _model)
             status_code = 403
             status = 'Refused'
+        elif stop_reason == 'max_tokens':
+            # hit max_tokens before finishing -> thinking tokens count toward it too, still billed in full.
+            status_code = 200
+            status = 'Truncated'
         else:
             status_code = 200
             status = 'Completed'

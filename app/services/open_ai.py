@@ -53,6 +53,7 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
     token_counter: int = 0
     parts: list[str] = []
     usage = None
+    finish_reason: str | None = None
 
     def mid_stream_failure(fallback_status_code: int) -> None:
         """
@@ -112,6 +113,8 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
                 usage = chunk.usage
             if not chunk.choices: # empty list did not capture tokens yet
                 continue
+            if chunk.choices[0].finish_reason:
+                finish_reason = chunk.choices[0].finish_reason
             delta = chunk.choices[0].delta.content
             if delta:
                 token_counter += len(encoding.encode(delta))
@@ -131,7 +134,8 @@ async def get_openai_response(payload: ChatRequest, context: list[dict[str,str]]
             completion_tokens = token_counter
             response_tokens = token_counter
         status_code = 200
-        status = 'Completed'
+        # 'length' -> hit max_tokens before finishing (reasoning tokens count toward it too).
+        status = 'Truncated' if finish_reason == 'length' else 'Completed'
         billable = True
 
     # non-billable: OpenAI rejected the request outright - it never started

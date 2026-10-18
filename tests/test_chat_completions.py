@@ -43,6 +43,24 @@ async def failed_response(payload, context, history_tokens, prompt_tokens):
     )
 
 """
+truncated -> thinking used most of max_tokens, the reply was cut off (or never started).
+"""
+def truncated_response(text: str):
+    async def _truncated_response(payload, context, history_tokens, prompt_tokens):
+        return provider_response(
+            response=text,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=100,
+            context_tokens=history_tokens,
+            status_code=200,
+            status='Truncated',
+            started_generation=True,
+            billable=True,
+            response_tokens=len(text) // 4,
+        )
+    return _truncated_response
+
+"""
 Return a function that sends a chat request
 with a Basic tier key for gpt-5.6-luna.
 """
@@ -113,3 +131,67 @@ async def test_completed_first_turn_keeps_conversation(send_chat, monkeypatch):
     async with SessionLocal() as db:
         roles = (await db.execute(select(Messages.role).order_by(Messages.id))).scalars().all()
     assert roles == ['user', 'assistant']
+
+"""
+Test if a truncated reply with no visible text
+saves no messages and deletes the conversation it created,
+but is still billed in full and returns error_detail.
+"""
+async def test_empty_truncated_reply_is_billed_but_not_saved(send_chat, monkeypatch):
+    monkeypatch.setattr(provider_service, 'get_openai_response', truncated_response(''))
+
+    response = await send_chat()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['conversation_id'] is None
+    assert body['error_detail'] == provider_service.TRUNCATED_DETAIL
+    assert await count_rows(Conversations) == 0
+    assert await count_rows(Messages) == 0
+
+    async with SessionLocal() as db:
+        row = (await db.execute(select(UsageRecords))).scalar_one()
+    assert row.status == 'Truncated'
+    assert row.completion_tokens == 100
+    assert row.conversation_id is None
+
+"""
+Test if a truncated reply with visible text
+is saved like any other turn and returns error_detail.
+"""
+async def test_partial_truncated_reply_is_saved(send_chat, monkeypatch):
+    monkeypatch.setattr(provider_service, 'get_openai_response', truncated_response('The answer is'))
+
+    response = await send_chat()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body['conversation_id'] is not None
+    assert body['output'] == 'The answer is'
+    assert body['error_detail'] == provider_service.TRUNCATED_DETAIL
+    assert await count_rows(Messages) == 2
+
+"""
+Test if an empty reply on an existing conversation
+keeps the conversation and adds no messages to it.
+"""
+async def test_empty_reply_keeps_existing_conversation(send_chat, monkeypatch):
+    monkeypatch.setattr(provider_service, 'get_openai_response', completed_response)
+    conversation_id = (await send_chat()).json()['conversation_id']
+
+    monkeypatch.setattr(provider_service, 'get_openai_response', truncated_response(''))
+    response = await send_chat(conversation_id=conversation_id)
+
+    assert response.json()['conversation_id'] == conversation_id
+    assert await count_rows(Conversations) == 1
+    assert await count_rows(Messages) == 2
+
+"""
+Test if a completed reply returns no error_detail.
+"""
+async def test_completed_reply_has_no_error_detail(send_chat, monkeypatch):
+    monkeypatch.setattr(provider_service, 'get_openai_response', completed_response)
+
+    response = await send_chat()
+
+    assert response.json()['error_detail'] is None

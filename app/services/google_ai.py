@@ -153,6 +153,10 @@ async def get_gemini_response(payload: ChatRequest, context: list[dict[str,str]]
             logger.warning("Gemini refused to generate a response (%s) model=%s", block_reason or finish_reason, _model)
             status_code = 403
             status = 'Refused'
+        elif finish_reason == 'MAX_TOKENS':
+            # hit max_output_tokens before finishing -> thinking tokens count toward it too, still billed in full.
+            status_code = 200
+            status = 'Truncated'
         else:
             status_code = 200
             status = 'Completed'
@@ -309,7 +313,11 @@ async def get_replicate_response(payload: ChatRequest, context: list[dict[str,st
             response_tokens = completion_tokens
             billable = True
             status_code = 200
-            status = 'Completed'
+            # replicate exposes no finish reason -> an output count that reached max_tokens means it was cut off.
+            if output_token_count is not None and output_token_count >= _max_tokens:
+                status = 'Truncated'
+            else:
+                status = 'Completed'
 
     # Replicate rejected the request (401 token, 402 billing, 404 model, 422 input, 429 rate limit)
     # -> non-billable when the prediction was never created or never streamed.

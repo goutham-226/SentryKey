@@ -29,6 +29,9 @@ from app.services.google_ai import get_gemini_tokens, get_gemini_response, get_r
 
 logger = logging.getLogger(__name__)
 
+# returned in error_detail when the reply hit max_tokens before finishing.
+TRUNCATED_DETAIL = 'Reply hit max_tokens before finishing (thinking tokens count toward it). Increase max_tokens for a complete answer.'
+
 async def get_total_tokens(api_key: ApiKeys,prompt_tokens: int,payload: ChatRequest,context_tokens: int,db: AsyncSession) -> tuple[int, int, UsageRecords]:
     """
     A method to calculate
@@ -182,17 +185,19 @@ async def update_usage_history(payload: ChatRequest, api_key: ApiKeys, model_res
     Settle the reservation row
     with the real token usage, and insert messages
     after getting a model response.
-    created_conversation_id -> a conversation created by this request, deleted if the model failed before generating,
-    so a failed first turn leaves no empty conversation. payload.conversation_id is set to None to tell the caller.
+    created_conversation_id -> a conversation created by this request, deleted if no messages were saved
+    (the model failed before generating, or produced no visible answer), so a failed first turn
+    leaves no empty conversation. payload.conversation_id is set to None to tell the caller.
     """
     # UsageRecords.model_id references models.id, payload.model is the model slug.
     stmt = select(Models.id).where(Models.model_id == payload.model)
     result = await db.execute(stmt)
     model_id: int | None = result.scalar_one_or_none()
 
-    # if model generated tokens insert messages.
+    # if model generated a visible answer insert messages.
     # if model failed before generation do not update messages -> doing so will affect history context trimmming and model performance.
-    if model_response.started_generation:
+    # an empty answer (e.g. thinking used all of max_tokens) is not saved either -> it would leave an unanswered user turn in the history.
+    if model_response.started_generation and model_response.response.strip():
         # insert user message
         user_message = Messages(
                              conversation_id = payload.conversation_id,
@@ -217,7 +222,7 @@ async def update_usage_history(payload: ChatRequest, api_key: ApiKeys, model_res
         db.add(assistant_message)
         await db.flush()
 
-    # failed before generating on a conversation this request created -> nothing was saved into it, delete it.
+    # nothing saved on a conversation this request created -> it would stay empty, delete it.
     # an existing conversation is kept -> it still holds earlier turns.
     elif created_conversation_id is not None:
         await db.execute(delete(Conversations).where(Conversations.id == created_conversation_id))
@@ -420,5 +425,5 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
                  completion_tokens = model_response.completion_tokens,
                  quota_remaining = max(daily_token_limit - tokens_used_after_response, 0),
                  conversation_id = payload.conversation_id,
-                 error_detail = None,
+                 error_detail = TRUNCATED_DETAIL if model_response.status == 'Truncated' else None,
                 )

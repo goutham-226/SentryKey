@@ -259,9 +259,18 @@ adds an empty turn to the history.
 
 ### Reasoning tokens
 
-Claude and Gemini think before they answer. Thinking tokens are billed to the token quota like
-any output, but stored messages only count the visible answer. Thinking is never sent back as
-history.
+Claude, Gemini and the GPT-5.6 models think before they answer. Thinking tokens are billed to
+the token quota like any output, but stored messages only count the visible answer. Thinking is
+never sent back as history.
+
+Thinking counts toward `max_tokens`, so a small `max_tokens` can cut the answer off, or leave
+nothing for it at all. Each provider's stop signal is checked: `finish_reason: "length"` (OpenAI),
+`stop_reason: "max_tokens"` (Claude) and `finish_reason: "MAX_TOKENS"` (Gemini). Replicate
+reports no stop reason, so a reply whose output count reached `max_tokens` is treated as cut
+off. Such a reply is recorded as `Truncated` and billed in full, and the response's
+`error_detail` tells the client to raise `max_tokens`. A cut-off answer is saved like any
+other turn. An empty one is not: neither message is saved, so the history never ends on an
+unanswered prompt, and a conversation the request created is deleted.
 
 ### Migrations
 
@@ -435,6 +444,9 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 `max_tokens` is lowered to fit your remaining budget before the request is sent, so you can't
 overspend, even with parallel requests.
 
+`error_detail` is `null` unless the reply hit `max_tokens` before finishing. Then it explains
+that the answer was cut off, and `output` holds whatever was written before the limit.
+
 Model ids by tier:
 
 | Tier | OpenAI | Anthropic | Google |
@@ -450,6 +462,7 @@ stored in the usage record:
 | :--- | :--- | :--- |
 | `Completed` | Finished normally. | Provider's reported usage |
 | `Interrupted` | Broke mid-stream. `output` has what was generated. | Tokens received + 15 |
+| `Truncated` | Hit `max_tokens` before finishing, often because thinking used most of it. `error_detail` says so. An empty reply saves no messages. | Provider's reported usage |
 | `Refused` | Claude or Gemini declined to answer. Status code `403`. | Provider's reported usage |
 | `Failed` | Failed before the first token. `output` is a "model not available" message; no messages saved. A conversation started by this request is deleted and `conversation_id` is `null`. | Nothing |
 | `Expired` | The worker died before settling, and the sweeper released the reservation. The client never got a response. | Nothing |
@@ -621,8 +634,10 @@ Deletes cascade differently on purpose:
 │   ├── test_chat_history.py     GET /v1/chat-history: format, order, 404s
 │   ├── test_deps.py             Auth and tier checks: bad/revoked keys, no plan, wrong tier
 │   ├── test_reservations.py     Sweeping abandoned reservations
-│   ├── test_chat_completions.py POST /v1/chat/completions with a fake provider: conversation cleanup
+│   ├── test_chat_completions.py POST /v1/chat/completions with a fake provider: conversation
+│   │                            cleanup, truncated and empty replies
 │   ├── test_usage_indexes.py    Ledger indexes exist and are used by the quota and sweep queries
+│   ├── test_providers.py        Each provider module with a fake SDK stream: Truncated vs Completed
 │   ├── test_security.py         Password hashing
 │   └── test_schemas.py          Request/response validation
 ├── alembic/versions/            One reversible migration per schema change
@@ -690,15 +705,9 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
   deleted when the reservation is settled, and the response returns `conversation_id: null`.
 - The quota `SUM`s read the whole usage ledger on every request, while the key was locked.
   An index on `(api_key_id, requested_at)` now takes them straight to one key's last 24 hours.
-
-### Thinking can eat the whole reply
-
-Claude Opus 5, Sonnet 5 and Gemini think by default, and thinking counts toward `max_tokens`.
-With a small `max_tokens` the reply can come back empty or cut off. An empty message is saved
-and skipped in later history, but `stop_reason: "max_tokens"` isn't checked, so cut-off
-replies are still reported as `Completed`.
-
-**Fix:** don't save empty messages, and give `max_tokens` stops their own status.
+- Replies cut off by `max_tokens` (often by thinking) were reported as `Completed`, and empty
+  ones were still saved. They're now `Truncated` with an `error_detail`, and empty replies
+  save no messages.
 
 ### `max_tokens` isn't capped per model
 
@@ -731,10 +740,11 @@ model's tokenizer when the model changes.
 ### The chat path has no tests
 
 Tests cover registration, keys, subscriptions, the catalog, chat history, auth checks,
-password hashing, schemas and the stale-reservation sweep. `POST /v1/chat/completions` is
-only tested for conversation cleanup, with a fake OpenAI response. The provider modules in
-`app/services/` (OpenAI, Anthropic and Google) have no tests. Reservations, history trimming
-and provider error handling are only tested by hand.
+password hashing, schemas, the stale-reservation sweep and the ledger indexes.
+`POST /v1/chat/completions` is tested for conversation cleanup and truncated replies, with a
+fake OpenAI response. The provider modules are tested with fake SDK streams, but only for how
+they report a `max_tokens` stop. Reservations, history trimming and provider error handling
+are only tested by hand.
 
 **Fix:** tests with mocked provider clients, covering each status, cancellation, parallel
 requests on one key, and trimming at the context limit.
