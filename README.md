@@ -355,7 +355,7 @@ Each commit then runs YAML checks, a large-file check, private-key detection,
 | :---: | :--- | :--- | :--- |
 | 🔓 | `GET` | `/health` | Liveness check. |
 | 🔓 | `POST` | `/v1/auth/register` | Create an account. Password 8–27 characters, name 1–100. `409` if the email exists, `422` on bad input. |
-| 🔓 | `GET` | `/v1/models-catalog` | Every model with its provider and required plan. |
+| 🔓 | `GET` | `/v1/models-catalog` | Every active model with its provider and required plan. |
 | 🔑 | `POST` | `/v1/keys` | Create an API key (email and password in the JSON body). The full key is shown **once**. `401` on bad credentials. |
 | 🔑 | `GET` | `/v1/keys` | List your active keys by prefix. `404` if you have none. |
 | 🔑 | `DELETE` | `/v1/keys/{key_id}` | Revoke a key. It returns `401` from then on. `404` if it isn't yours. |
@@ -633,7 +633,7 @@ Deletes cascade differently on purpose:
 │   ├── test_auth.py             POST /v1/auth/register
 │   ├── test_keys.py             Creating, listing and revoking keys
 │   ├── test_subscriptions.py    POST /v1/subscriptions
-│   ├── test_catalog.py          GET /v1/models-catalog
+│   ├── test_catalog.py          GET /v1/models-catalog, hiding deactivated models
 │   ├── test_chat_history.py     GET /v1/chat-history: format, order, 404s
 │   ├── test_deps.py             Auth and tier checks: bad/revoked keys, no plan, wrong tier
 │   ├── test_reservations.py     Sweeping abandoned reservations
@@ -698,8 +698,7 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
 - Chat history crashed with a 500 on an unknown conversation id. It now returns `404`.
 - Reasoning tokens inflated stored message sizes and context billing. Messages now store
   visible tokens only.
-- Deactivated models were still usable in chat. They now get `404` (the catalog still lists
-  them, see below).
+- Deactivated models were still usable in chat. They now get `404`.
 - Empty assistant messages broke later Claude requests. They are now skipped when history is
   built.
 - A crashed worker left its reservation counting against the key for 24 hours. A background
@@ -714,12 +713,8 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
 - `max_tokens` above a model's output limit (e.g. 64K on Claude Haiku 4.5) got a `400` from
   the provider and a generic "model not available" message. It's now lowered to the limit
   stored in `models.max_output_tokens` before anything is reserved.
-
-### The catalog ignores `is_active`
-
-Chat completions reject deactivated models, but `GET /v1/models-catalog` still lists them.
-
-**Fix:** filter the catalog by `is_active`.
+- `GET /v1/models-catalog` listed deactivated models that chat would reject. It now only lists
+  active ones.
 
 ### Stored message token counts are approximate
 

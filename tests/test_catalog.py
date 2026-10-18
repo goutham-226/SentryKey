@@ -2,6 +2,11 @@
 
 # test /v1/models-catalog endpoint
 
+from sqlalchemy import update
+
+from app.db import SessionLocal
+from app.models import Models
+
 
 """
 Test if get /v1/models-catalog
@@ -68,30 +73,25 @@ async def test_models_catalog_returns_all_seeded_models_with_exact_provider_name
     assert body[8]['provider'] == 'anthropic'
     assert body[8]['tier'] == 'Basic'
 
+"""
+Test if a deactivated model is left out of the catalog.
 
+models are seeded once per session and not cleaned between tests ->
+the model is reactivated afterwards so other tests still see it.
+"""
+async def set_model_active(model_id: str, active: bool):
+    async with SessionLocal() as db:
+        await db.execute(update(Models).where(Models.model_id == model_id).values(is_active=active))
+        await db.commit()
 
+async def test_models_catalog_hides_deactivated_models(client):
+    await set_model_active('gpt-5.6-luna', False)
+    try:
+        response = await client.get('v1/models-catalog')
+    finally:
+        await set_model_active('gpt-5.6-luna', True)
 
-
-
-
-
-
-
-
-
-   
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        
+    assert response.status_code == 200
+    names = [m['model_name'] for m in response.json()]
+    assert 'gpt-5.6-luna' not in names
+    assert len(names) == 8
