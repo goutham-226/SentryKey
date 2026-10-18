@@ -30,7 +30,8 @@ from app.services.google_ai import get_gemini_tokens, get_gemini_response, get_r
 logger = logging.getLogger(__name__)
 
 # returned in error_detail when the reply hit max_tokens before finishing.
-TRUNCATED_DETAIL = 'Reply hit max_tokens before finishing (thinking tokens count toward it). Increase max_tokens for a complete answer.'
+# max_tokens may already be lowered to the model's output limit or the remaining quota -> raising it only helps below those.
+TRUNCATED_DETAIL = "Reply hit max_tokens before finishing (thinking tokens count toward it). Increase max_tokens for a complete answer, up to the model's output limit and your remaining quota."
 
 async def get_total_tokens(api_key: ApiKeys,prompt_tokens: int,payload: ChatRequest,context_tokens: int,db: AsyncSession) -> tuple[int, int, UsageRecords]:
     """
@@ -74,15 +75,17 @@ async def get_total_tokens(api_key: ApiKeys,prompt_tokens: int,payload: ChatRequ
     return total_tokens_used, _max_tokens, reserve
 
  
-async def get_model_provider(model: str,db: AsyncSession) -> str | None:
+async def get_model_provider(model: str,db: AsyncSession) -> tuple[str | None, int | None]:
     """
-    A method to get a model's provider.
+    A method to get a model's provider and output cap (max_output_tokens).
+    returns (None, None) for an unknown model.
     """
-    stmt = select(Models.provider).where(Models.model_id == model)
+    stmt = select(Models.provider, Models.max_output_tokens).where(Models.model_id == model)
     result = await db.execute(stmt)
-    provider = result.scalar_one_or_none()
-
-    return provider 
+    row = result.one_or_none()
+    if row is None:
+        return None, None
+    return row.provider, row.max_output_tokens
 
 
 async def create_conversation_id(payload: ChatRequest, api_key: ApiKeys,db: AsyncSession) -> Conversations:
@@ -332,8 +335,12 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
     # get daily token limit
     daily_token_limit: int = api_key.daily_quota
 
-    # get provider for the payload model.
-    _provider = await get_model_provider(model=_model,db=db)
+    # get provider and output cap for the payload model.
+    _provider, max_output_tokens = await get_model_provider(model=_model,db=db)
+    # cap max_tokens to the model's output limit before reserving -> the provider would reject a larger value with a 400,
+    # and reserving tokens the model can never generate would hold back parallel requests for nothing.
+    if max_output_tokens is not None:
+        payload.max_tokens = min(payload.max_tokens, max_output_tokens)
     # get_input_tokens from a model provider.
     if _provider == 'openai':
         # get prompt tokens from provider function. 

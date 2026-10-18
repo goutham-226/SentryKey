@@ -23,6 +23,7 @@ async def seed():
                        min_tier_id=premium_id,
                        context_window=1050000,
                        max_token_schema='max_completion_tokens',
+                       max_output_tokens=128_000,
                        input_price_per_1M=4.000000,
                        output_price_per_1M=20.000000,
                       )
@@ -38,6 +39,7 @@ async def seed():
                        min_tier_id=premium_id,
                        context_window=1048576,
                        max_token_schema='max_output_tokens',
+                       max_output_tokens=65_535,
                        input_price_per_1M=4.000000,
                        output_price_per_1M=18.000000,
                       )
@@ -53,6 +55,7 @@ async def seed():
                        min_tier_id=premium_id,
                        context_window=1000000,
                        max_token_schema='max_tokens',
+                       max_output_tokens=128_000,
                        input_price_per_1M=5.000000,
                        output_price_per_1M=25.000000,
                       )
@@ -69,6 +72,7 @@ async def seed():
                        min_tier_id=pro_id,
                        context_window=1048576,
                        max_token_schema='max_output_tokens',
+                       max_output_tokens=65_536,
                        input_price_per_1M=1.500000,
                        output_price_per_1M=9.000000,
                       )
@@ -85,6 +89,7 @@ async def seed():
                        min_tier_id=pro_id,
                        context_window=200000 ,  
                        max_token_schema='max_completion_tokens',
+                       max_output_tokens=128_000,
                        input_price_per_1M=2.000000,
                        output_price_per_1M=12.000000,
                       )
@@ -101,6 +106,7 @@ async def seed():
                        min_tier_id=pro_id,
                        context_window=1000000,  
                        max_token_schema='max_tokens',
+                       max_output_tokens=128_000,
                        input_price_per_1M=1.000000,
                        output_price_per_1M=5.000000,
                       )
@@ -117,6 +123,7 @@ async def seed():
                        min_tier_id=basic_id,
                        context_window=1_000_000,  
                        max_token_schema='max_completion_tokens',
+                       max_output_tokens=128_000,
                        input_price_per_1M=0.200000,
                        output_price_per_1M=1.200000,
                       )
@@ -133,6 +140,7 @@ async def seed():
                          min_tier_id=basic_id,
                          context_window=1_000_000,  
                          max_token_schema='max_output_tokens',
+                         max_output_tokens=65_536,
                          input_price_per_1M=0.250000,
                          output_price_per_1M=1.500000,
                         )
@@ -149,6 +157,7 @@ async def seed():
                        min_tier_id=basic_id,
                        context_window=1000000,
                        max_token_schema='max_tokens',
+                       max_output_tokens=64_000,
                        input_price_per_1M=1.000000,
                        output_price_per_1M=4.000000,
                       )

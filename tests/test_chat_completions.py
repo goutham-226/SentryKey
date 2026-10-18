@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
-from app.models import Conversations, Messages, UsageRecords
+from app.models import Conversations, Messages, Models, UsageRecords
 from app.services import provider_service
 from app.services.provider_data import provider_response
 
@@ -68,8 +68,8 @@ with a Basic tier key for gpt-5.6-luna.
 async def send_chat(client, subscribed_api_key):
     key = (await subscribed_api_key('Basic'))['api_key']
 
-    async def _send_chat(conversation_id: int | None = None):
-        request = {'prompt': 'hi', 'model': 'gpt-5.6-luna', 'max_tokens': 100, 'conversation_id': conversation_id}
+    async def _send_chat(conversation_id: int | None = None, model: str = 'gpt-5.6-luna', max_tokens: int = 100):
+        request = {'prompt': 'hi', 'model': model, 'max_tokens': max_tokens, 'conversation_id': conversation_id}
         return await client.post('/v1/chat/completions', json=request, headers={'Authorization': f'Bearer {key}'})
     return _send_chat
 
@@ -195,3 +195,53 @@ async def test_completed_reply_has_no_error_detail(send_chat, monkeypatch):
     response = await send_chat()
 
     assert response.json()['error_detail'] is None
+
+"""
+Fake provider that records the max_tokens it was sent.
+"""
+def recording_response(sent: list[int]):
+    async def _recording_response(payload, context, history_tokens, prompt_tokens):
+        sent.append(payload.max_tokens)
+        return await completed_response(payload, context, history_tokens, prompt_tokens)
+    return _recording_response
+
+async def fake_anthropic_tokens(text, model, role):
+    return 1
+
+"""
+Test if max_tokens above the model's output limit is capped to it
+before reserving -> claude-haiku-4-5 allows 64,000, below the 100,000 daily quota.
+"""
+async def test_max_tokens_capped_to_model_limit(send_chat, monkeypatch):
+    sent: list[int] = []
+    monkeypatch.setattr(provider_service, 'get_anthropic_tokens', fake_anthropic_tokens)
+    monkeypatch.setattr(provider_service, 'get_anthropic_response', recording_response(sent))
+
+    response = await send_chat(model='claude-haiku-4-5', max_tokens=90_000)
+
+    assert response.status_code == 200
+    assert sent == [64_000]
+
+"""
+Test if max_tokens below the model's output limit is left alone
+-> only the quota lowers it.
+"""
+async def test_max_tokens_under_model_limit_is_kept(send_chat, monkeypatch):
+    sent: list[int] = []
+    monkeypatch.setattr(provider_service, 'get_openai_response', recording_response(sent))
+
+    response = await send_chat(model='gpt-5.6-luna', max_tokens=90_000)
+
+    assert response.status_code == 200
+    assert sent == [90_000]
+
+"""
+Test if every seeded model has an output limit.
+"""
+async def test_every_model_has_output_limit():
+    async with SessionLocal() as db:
+        limits = dict((await db.execute(select(Models.model_id, Models.max_output_tokens))).all())
+
+    assert len(limits) == 9
+    assert all(limit is not None for limit in limits.values())
+    assert limits['claude-haiku-4-5'] == 64_000

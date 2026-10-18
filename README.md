@@ -164,9 +164,11 @@ it together. So quota is **reserved** before the call:
 
 1. **Lock.** `SELECT ... FOR UPDATE` locks the key's `api_keys` row. Parallel requests on
    the same key wait here, even across servers, because the lock lives in Postgres.
-2. **Check.** Under the lock, the history is trimmed to the remaining context quota. Then
-   the prompt (already counted) is checked against the token quota. `max_tokens` is lowered
-   to whatever is left, or the request gets `429`.
+2. **Check.** Before the lock, `max_tokens` is lowered to the model's output limit, so the
+   provider never rejects it and no budget is reserved that the model can't use. Under the
+   lock, the history is trimmed to the remaining context quota. Then the prompt (already
+   counted) is checked against the token quota. `max_tokens` is lowered to whatever is left,
+   or the request gets `429`.
 3. **Reserve.** A `Reserved` row for `prompt + max_tokens` is inserted, along with the
    history size in `context_tokens`. Committing it releases the lock. The next request's
    `SUM`s already include it. A new conversation is committed at this point too, so a `429`
@@ -441,8 +443,9 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 }
 ```
 
-`max_tokens` is lowered to fit your remaining budget before the request is sent, so you can't
-overspend, even with parallel requests.
+`max_tokens` is lowered to the model's output limit and to your remaining budget before the
+request is sent, so the provider never rejects it and you can't overspend, even with parallel
+requests.
 
 `error_detail` is `null` unless the reply hit `max_tokens` before finishing. Then it explains
 that the answer was cut off, and `output` holds whatever was written before the limit.
@@ -589,7 +592,7 @@ subscription_tiers ──< users ──< api_keys ──< conversations ──< 
 | Table | Holds |
 | :--- | :--- |
 | `subscription_tiers` | Basic, Pro, Premium and their ranks |
-| `models` | Provider, minimum tier, context window, max-tokens parameter name, prices per 1M tokens |
+| `models` | Provider, minimum tier, context window, max-tokens parameter name, output limit, prices per 1M tokens |
 | `users` | Accounts |
 | `subscriptions` | What a user bought and for how long; the only source of entitlement |
 | `api_keys` | Hashed keys, prefixes, quotas, revocation date |
@@ -635,7 +638,7 @@ Deletes cascade differently on purpose:
 │   ├── test_deps.py             Auth and tier checks: bad/revoked keys, no plan, wrong tier
 │   ├── test_reservations.py     Sweeping abandoned reservations
 │   ├── test_chat_completions.py POST /v1/chat/completions with a fake provider: conversation
-│   │                            cleanup, truncated and empty replies
+│   │                            cleanup, truncated and empty replies, max_tokens capping
 │   ├── test_usage_indexes.py    Ledger indexes exist and are used by the quota and sweep queries
 │   ├── test_providers.py        Each provider module with a fake SDK stream: Truncated vs Completed
 │   ├── test_security.py         Password hashing
@@ -708,15 +711,9 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
 - Replies cut off by `max_tokens` (often by thinking) were reported as `Completed`, and empty
   ones were still saved. They're now `Truncated` with an `error_detail`, and empty replies
   save no messages.
-
-### `max_tokens` isn't capped per model
-
-`max_tokens` is capped by your remaining quota, not by the model's output limit. Claude
-Haiku 4.5 allows at most 64K output tokens, so a larger request gets `400` from Anthropic.
-It settles as `Failed` with nothing billed, but you only see a generic "model not available"
-message.
-
-**Fix:** store each model's output limit in `models` and cap to it.
+- `max_tokens` above a model's output limit (e.g. 64K on Claude Haiku 4.5) got a `400` from
+  the provider and a generic "model not available" message. It's now lowered to the limit
+  stored in `models.max_output_tokens` before anything is reserved.
 
 ### The catalog ignores `is_active`
 

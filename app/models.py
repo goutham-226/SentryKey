@@ -69,6 +69,7 @@ class Models(Base):
     context_window: Mapped[int] = mapped_column(Integer)
     context_budget_tokens: Mapped[int] = mapped_column(Integer,server_default='100000')
     max_token_schema: Mapped[str] = mapped_column(Text)
+    max_output_tokens: Mapped[int|None] = mapped_column(Integer) # provider's output cap (thinking included) -> None means only the quota caps max_tokens.
     input_price_per_1M: Mapped[Decimal] = mapped_column(Numeric(12,6))
     output_price_per_1M: Mapped[Decimal] = mapped_column(Numeric(12,6))
     is_active: Mapped[bool] = mapped_column(Boolean,server_default='true') # to raise model not available when provider depricates    
