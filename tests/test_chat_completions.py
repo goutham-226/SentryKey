@@ -7,8 +7,9 @@ from sqlalchemy import func, select
 
 from app.db import SessionLocal
 from app.models import Conversations, Messages, Models, UsageRecords
-from app.services import provider_service
+from app.services import anthropic_ai, provider_service
 from app.services.provider_data import provider_response
+from tests.test_providers import fake_anthropic_client
 
 """
 Fake get_openai_response replacements.
@@ -245,3 +246,24 @@ async def test_every_model_has_output_limit():
     assert len(limits) == 9
     assert all(limit is not None for limit in limits.values())
     assert limits['claude-haiku-4-5'] == 64_000
+
+"""
+Test if a Claude turn bills and stores the prompt's own count,
+without the system prompt -> the fake client reports input_tokens=12,
+the pre-call count of the prompt is 3.
+"""
+async def test_claude_turn_excludes_system_prompt(send_chat, monkeypatch):
+    async def three_tokens(text, model, role):
+        return 3
+    monkeypatch.setattr(provider_service, 'get_anthropic_tokens', three_tokens)
+    monkeypatch.setattr(anthropic_ai, 'client', fake_anthropic_client('end_turn'))
+
+    response = await send_chat(model='claude-haiku-4-5')
+
+    assert response.status_code == 200
+    assert response.json()['prompt_tokens'] == 3
+    async with SessionLocal() as db:
+        user_tokens = (await db.execute(select(Messages.token_count).where(Messages.role == 'user'))).scalar_one()
+        billed = (await db.execute(select(UsageRecords.prompt_tokens))).scalar_one()
+    assert user_tokens == 3
+    assert billed == 3

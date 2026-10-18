@@ -242,10 +242,11 @@ adds an empty turn to the history.
 
 ### Claude specifics
 
-- Every Claude request carries a system prompt set by `ANTHROPIC_SYSTEM_PROMPT`.
-- Anthropic's `input_tokens` includes the system prompt, history and new prompt. The gateway
-  subtracts the history and records the rest as `prompt_tokens`, never less than the
-  pre-call count.
+- Every Claude request carries a system prompt set by `ANTHROPIC_SYSTEM_PROMPT`. It's never
+  charged to the user.
+- Anthropic's `input_tokens` includes the system prompt, history and new prompt, so it isn't
+  used for billing. `prompt_tokens` is the pre-call `count_tokens` count of the prompt alone,
+  and that's also what the saved user message stores.
 - If Claude refuses (`stop_reason: "refusal"`), the tokens are still billed, because
   Anthropic charges for them. The row is recorded as `Refused` with status code `403`.
 
@@ -715,19 +716,22 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
   stored in `models.max_output_tokens` before anything is reserved.
 - `GET /v1/models-catalog` listed deactivated models that chat would reject. It now only lists
   active ones.
+- Claude prompts were billed and stored with the system prompt included, so every Claude
+  user message over-counted history by the size of `ANTHROPIC_SYSTEM_PROMPT`. Claude now bills
+  and stores the prompt's own count, and the system prompt is never charged.
 
 ### Stored message token counts are approximate
 
-Saved messages keep a `token_count`, which is used to trim and bill history. Two problems:
+Saved messages keep a `token_count`, which is used to trim and bill history. Counts come
+from the tokenizer of the model that wrote the message. After switching between GPT and
+Claude, history is billed with the old model's counts. The prompt is never billed below its
+own size, but the prompt/context split can be off.
 
-- Claude user messages include the system prompt in their count, so each is over-counted
-  by the size of `ANTHROPIC_SYSTEM_PROMPT`.
-- Counts come from the tokenizer of the model that wrote the message. After switching
-  between GPT and Claude, history is billed with the old model's counts. The prompt is never
-  billed below its own size, but the prompt/context split can be off.
+Claude user messages saved before the system-prompt fix still include the system prompt in
+their count, so older conversations over-count history until those messages fall out of the
+last eight.
 
-**Fix:** track the system prompt's size separately, and recount history with the new
-model's tokenizer when the model changes.
+**Fix:** recount history with the new model's tokenizer when the model changes.
 
 ### The chat path has no tests
 

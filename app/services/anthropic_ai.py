@@ -57,7 +57,6 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
     # declared ahead of the try block so except clauses can read whatever was
     # streamed before the failure.
     parts: list[str] = []
-    input_tokens: int | None = None # message_start usage -> system prompt + context + prompt.
     output_tokens: int = 0 # message_delta usage -> cumulative completion tokens.
     thinking_tokens: int = 0 # message_delta usage -> reasoning tokens included in output_tokens.
     stop_reason: str | None = None
@@ -118,7 +117,6 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
                 if event.type == 'message_start':
                     started_generation = True
                     status = 'Interrupted'
-                    input_tokens = event.message.usage.input_tokens
                 elif event.type == 'content_block_delta' and event.delta.type == 'text_delta':
                     parts.append(event.delta.text)
                 elif event.type == 'message_delta':
@@ -130,10 +128,8 @@ async def get_anthropic_response(payload: ChatRequest, context: list[dict[str,st
                 # as an APIStatusError -> handled by the except clauses below.
 
         model_response = ''.join(parts)
-        if input_tokens is not None:
-            # input_tokens includes context (billed to the context quota) and the system prompt.
-            # floor at the count_tokens prompt estimate in case context_tokens over-counts.
-            prompt_tokens = max(input_tokens - context_tokens, prompt_tokens)
+        # prompt_tokens stays the count_tokens count of the prompt alone -> anthropic's input_tokens also includes
+        # the system prompt, which is never billed to the user (nor stored in the user message's token_count).
         completion_tokens = output_tokens
         # output_tokens includes thinking tokens -> subtract them for the visible count.
         response_tokens = output_tokens - thinking_tokens

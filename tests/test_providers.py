@@ -79,6 +79,17 @@ async def test_anthropic_status(monkeypatch, stop_reason, status):
     assert (response.completion_tokens, response.response_tokens) == (50, 5)
 
 """
+Test if Claude bills only the prompt's own count -> the fake reports input_tokens=12
+(system prompt + prompt), the pre-call count of the prompt alone is 2.
+"""
+async def test_anthropic_does_not_bill_system_prompt(monkeypatch):
+    monkeypatch.setattr(anthropic_ai, 'client', fake_anthropic_client('end_turn'))
+
+    response = await anthropic_ai.get_anthropic_response(payload=make_payload('claude-sonnet-5'), context=[], history_tokens=0, prompt_tokens=2)
+
+    assert response.prompt_tokens == 2
+
+"""
 Gemini: one chunk with a thought part, an answer part and the finish_reason.
 """
 def fake_gemini_client(finish_reason: str):
