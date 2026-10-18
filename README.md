@@ -167,7 +167,9 @@ it together. So quota is **reserved** before the call:
    `SUM`s already include it. A new conversation is committed at this point too, so a `429`
    leaves nothing behind.
 4. **Settle.** After the call, the same row is overwritten with the real token counts.
-   Unused budget comes back immediately.
+   Unused budget comes back immediately. If the provider failed before generating anything
+   and the request created the conversation, the conversation is deleted in the same commit
+   and the response returns `conversation_id: null`.
 5. **Release.** If anything raises before settling, including a client disconnect, the row
    is set to 0 tokens with status `Failed`. Any conversation the request created is deleted.
 
@@ -177,6 +179,13 @@ keeps its data. If the release itself fails, it is logged and the original error
 re-raised.
 
 The lock is held for a few statements only, never during the provider stream.
+
+**The full `max_tokens` is reserved on purpose.** While a long request runs, a parallel
+request on the same key sees that whole budget as spent and may be limited or refused, until
+the first one settles and returns what it didn't use. Reserving in smaller steps mid-stream
+would free that budget sooner, but it would mean locking again during the stream and could let
+a key go over its quota. No race and no overspend is worth more here than squeezing out
+parallel throughput.
 
 **Abandoned reservations are swept.** If a worker dies between reserving and settling
 (`SIGKILL`, out of memory, host failure), no release runs. So every app process runs a
@@ -392,7 +401,8 @@ curl -X POST http://127.0.0.1:8000/v1/subscriptions \
 ```
 
 **3. Send a prompt.** Leave out `conversation_id` to start a new conversation. Send the
-returned id back to continue it.
+returned id back to continue it. If the first turn fails before the model generates anything,
+no conversation is kept and `conversation_id` comes back `null`.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/chat/completions \
@@ -436,7 +446,7 @@ stored in the usage record:
 | `Completed` | Finished normally. | Provider's reported usage |
 | `Interrupted` | Broke mid-stream. `output` has what was generated. | Tokens received + 15 |
 | `Refused` | Claude or Gemini declined to answer. Status code `403`. | Provider's reported usage |
-| `Failed` | Failed before the first token. `output` is a "model not available" message; no messages saved. | Nothing |
+| `Failed` | Failed before the first token. `output` is a "model not available" message; no messages saved. A conversation started by this request is deleted and `conversation_id` is `null`. | Nothing |
 | `Expired` | The worker died before settling, and the sweeper released the reservation. The client never got a response. | Nothing |
 
 **4. Read the conversation.**
@@ -606,6 +616,7 @@ Deletes cascade differently on purpose:
 │   ├── test_chat_history.py     GET /v1/chat-history: format, order, 404s
 │   ├── test_deps.py             Auth and tier checks: bad/revoked keys, no plan, wrong tier
 │   ├── test_reservations.py     Sweeping abandoned reservations
+│   ├── test_chat_completions.py POST /v1/chat/completions with a fake provider: conversation cleanup
 │   ├── test_security.py         Password hashing
 │   └── test_schemas.py          Request/response validation
 ├── alembic/versions/            One reversible migration per schema change
@@ -669,18 +680,8 @@ Every search is filtered by `api_key_id`, so one key can never recall another ke
   built.
 - A crashed worker left its reservation counting against the key for 24 hours. A background
   sweeper now releases `Reserved` rows older than 15 minutes.
-
-### Over-reservation near the limit
-
-The full `max_tokens` is reserved up front. While a long request runs, a parallel request
-on the same key sees all of it as spent and may be limited or refused. The budget comes back
-once the first request settles.
-
-### Empty conversations on failed first turns
-
-A new conversation is committed before the provider call. If the call then fails without
-generating anything, nothing is billed and no messages are saved, but the empty conversation
-stays. Conversations are only deleted when the request raises an exception.
+- A first turn that failed before generating left an empty conversation behind. It's now
+  deleted when the reservation is settled, and the response returns `conversation_id: null`.
 
 ### No index on the usage ledger
 
@@ -731,9 +732,10 @@ model's tokenizer when the model changes.
 ### The chat path has no tests
 
 Tests cover registration, keys, subscriptions, the catalog, chat history, auth checks,
-password hashing, schemas and the stale-reservation sweep. Nothing tests `POST /v1/chat/completions` or `app/services/`
-(OpenAI, Anthropic or Google).
-Reservations, history trimming and provider error handling are only tested by hand.
+password hashing, schemas and the stale-reservation sweep. `POST /v1/chat/completions` is
+only tested for conversation cleanup, with a fake OpenAI response. The provider modules in
+`app/services/` (OpenAI, Anthropic and Google) have no tests. Reservations, history trimming
+and provider error handling are only tested by hand.
 
 **Fix:** tests with mocked provider clients, covering each status, cancellation, parallel
 requests on one key, and trimming at the context limit.

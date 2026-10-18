@@ -50,7 +50,7 @@ class ChatResponse(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     quota_remaining: int
-    conversation_id: int
+    conversation_id: int | None # None -> a failed first turn, no conversation was kept.
     error_detail: str | None
 
 

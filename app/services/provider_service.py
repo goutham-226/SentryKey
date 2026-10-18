@@ -177,11 +177,13 @@ async def trim_message_history(history: Sequence[Messages], api_key: ApiKeys, db
     return trimmed_history, total_tokens_requested
 
 
-async def update_usage_history(payload: ChatRequest, api_key: ApiKeys, model_response: provider_response,row: UsageRecords,db: AsyncSession):
+async def update_usage_history(payload: ChatRequest, api_key: ApiKeys, model_response: provider_response,row: UsageRecords,db: AsyncSession, created_conversation_id: int | None = None):
     """
     Settle the reservation row
     with the real token usage, and insert messages
     after getting a model response.
+    created_conversation_id -> a conversation created by this request, deleted if the model failed before generating,
+    so a failed first turn leaves no empty conversation. payload.conversation_id is set to None to tell the caller.
     """
     # UsageRecords.model_id references models.id, payload.model is the model slug.
     stmt = select(Models.id).where(Models.model_id == payload.model)
@@ -215,6 +217,12 @@ async def update_usage_history(payload: ChatRequest, api_key: ApiKeys, model_res
         db.add(assistant_message)
         await db.flush()
 
+    # failed before generating on a conversation this request created -> nothing was saved into it, delete it.
+    # an existing conversation is kept -> it still holds earlier turns.
+    elif created_conversation_id is not None:
+        await db.execute(delete(Conversations).where(Conversations.id == created_conversation_id))
+        payload.conversation_id = None
+
     # settle the reservation with the real usage -> the session sends an UPDATE on commit (expire_on_commit=False keeps row attached).
     # non-billable -> set prompt_tokens, completion_tokens and context_tokens to 0.
     # billable -> use the response values, interrupted generations add a 15 token buffer to completion_tokens.
@@ -226,7 +234,7 @@ async def update_usage_history(payload: ChatRequest, api_key: ApiKeys, model_res
     row.context_tokens = model_response.context_tokens if billable else 0
     row.status = model_response.status
     row.status_code = model_response.status_code
-    # single commit -> messages and settled usage are written together.
+    # single commit -> messages (or the conversation delete) and settled usage are written together.
     await db.commit()
 
 
@@ -389,7 +397,7 @@ async def get_response(payload: ChatRequest, api_key: ApiKeys, db: AsyncSession)
         elif _provider == 'google' and _model == 'google/gemini-3.1-pro':
             model_response: provider_response = await get_replicate_response(payload=payload,context=conversation_context,history_tokens=context_tokens,prompt_tokens=prompt_tokens)
         # update database
-        await update_usage_history(payload=payload,api_key=api_key,model_response=model_response,row=reservations,db=db)
+        await update_usage_history(payload=payload,api_key=api_key,model_response=model_response,row=reservations,db=db,created_conversation_id=created_conversation_id)
 
     # BaseException -> also catches asyncio.CancelledError (request cancelled while awaiting the provider).
     except BaseException:
