@@ -35,7 +35,7 @@ One endpoint for nine AI models from three providers. It tracks daily token usag
 [Known flaws](#known-flaws)
 
 
-> [!NOTE]
+
 > Authored by [Goutham](https://github.com/goutham-226).
 > Core system architecture and execution were completed manually,
 > with AI tools limited strictly to reference learning and routine
