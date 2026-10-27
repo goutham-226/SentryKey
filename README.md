@@ -13,6 +13,7 @@ One endpoint for nine AI models from three providers. It tracks daily token usag
 > - **Metered:** 100,000 tokens per key per rolling 24 hours, tracked in a ledger.
 > - **Safe by design:** keys are stored hashed, quota is reserved before every call, and failed calls aren't billed.
 > - **Portable chats:** start on GPT, continue on Claude or Gemini.
+> - **Built by hand by [Goutham](https://github.com/goutham-226)**:. AI was used for learning and repetitive code completion only.
 
 [![CI](https://img.shields.io/github/actions/workflow/status/goutham-226/SentryKey/python-app.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/goutham-226/SentryKey/actions)
 [![Python](https://img.shields.io/badge/python-3.14-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
